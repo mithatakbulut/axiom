@@ -1,0 +1,24 @@
+name: Checks
+on: [push, pull_request]
+jobs:
+  workspace:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
+      - run: test -z "$(gofmt -l verity/cmd verity/internal vigil/cmd vigil/internal)"
+      - run: go -C verity vet ./...
+      - run: go -C vigil vet ./...
+      - run: make check
+      - run: go -C verity build ./cmd/verity
+      - run: go -C vigil build ./cmd/vigil
+  verity-minimum-go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+      - run: go -C verity test ./...

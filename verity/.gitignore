@@ -1,0 +1,13 @@
+# Go builds and release packages
+/verity
+/dist/
+
+# Local workflow state and proof artifacts
+/.verity/
+
+# Python hook bytecode
+__pycache__/
+*.pyc
+
+# macOS metadata
+.DS_Store

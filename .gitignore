@@ -1,0 +1,16 @@
+# Local workflow state, proofs, and snapshots
+/.verity/
+**/.verity/
+
+# Local builds and release archives
+/verity/verity
+/vigil/vigil
+**/dist/
+
+# Private experiment records (review separately before publication)
+/vigil/docs/evidence/
+
+# Local caches and OS metadata
+__pycache__/
+*.py[cod]
+.DS_Store

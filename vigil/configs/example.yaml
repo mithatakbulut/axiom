@@ -1,0 +1,30 @@
+version: 1
+mode: observe
+storage:
+  retention_days: 30
+models:
+  advisor: gpt-6.1-sol
+  reasoning_effort: high
+escalation:
+  enabled: true
+  shadow: true
+  require_approval: true
+  max_per_turn: 1
+  max_per_task: 2
+  cooldown_seconds: 300
+progress:
+  repeated_error_threshold: 2
+  minimum_distinct_attempts: 2
+  ignore_improving_tests: true
+budget:
+  max_parallel_agents: 2
+  max_subagents_per_task: 4
+  max_runtime_minutes: 60
+  max_model_requests: 150
+  require_model_on_spawn: true
+resources:
+  monitoring_enabled: true
+  max_cpu_percent: 150
+  max_process_mib: 2048
+  min_free_disk_mib: 1024
+  long_command_seconds: 300

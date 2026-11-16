@@ -1,0 +1,13 @@
+# Go builds and release packages
+/vigil
+/dist/
+
+# Python benchmark bytecode
+__pycache__/
+*.pyc
+
+# macOS metadata
+.DS_Store
+
+# Local experiment records require a separate publication review
+/docs/evidence/
