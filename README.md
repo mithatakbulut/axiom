@@ -7,6 +7,8 @@ links; a hook or link is not evidence of workflow completion or approval.
 See [Verity](verity/README.md), [Vigil](vigil/README.md), and the
 [synthetic bridge example](verity/docs/integrations/local-example.md).
 
+![Axiom overview: Verity, Codex agents, and Vigil](axiom-overview.png)
+
 ## Quick install from source
 
 Obtain the source with both `vigil/` and `verity/` in the workspace.

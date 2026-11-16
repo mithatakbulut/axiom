@@ -14,3 +14,15 @@
 __pycache__/
 *.py[cod]
 .DS_Store
+
+# Local research notes and historical records, retained outside releases
+/verity/docs/WORKLOG.md
+/verity/docs/decisions/codex-observation-arena.md
+/verity/docs/verification-evaluation.md
+/verity/verity-plan.md
+/vigil/VIGIL-REVIEW.md
+/vigil/docs/WORKLOG.md
+/vigil/docs/evaluation.md
+/vigil/docs/status.md
+/vigil/docs/technical-discovery.md
+/vigil/plan.md
