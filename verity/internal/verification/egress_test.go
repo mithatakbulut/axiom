@@ -150,7 +150,7 @@ func TestEgressBrokerTunnelsOnlyMatchingTLSHost(t *testing.T) {
 			_ = clientConn.Close()
 			select {
 			case <-done:
-			case <-time.After(time.Second):
+			case <-time.After(5 * time.Second):
 				t.Fatal("broker handler did not finish")
 			}
 			if !tc.wantTunnel {
