@@ -71,6 +71,7 @@ func (r Runtime) Execute(ctx context.Context, req execution.Request) (execution.
 	var thread string
 	var completed, failed bool
 	var failureSummary string
+	var reportedSummary string
 	for _, line := range bytes.Split(bytes.TrimSpace(stdout.Bytes()), []byte("\n")) {
 		var event struct {
 			Type     string `json:"type"`
@@ -78,6 +79,10 @@ func (r Runtime) Execute(ctx context.Context, req execution.Request) (execution.
 			Error    struct {
 				Message string `json:"message"`
 			} `json:"error"`
+			Item struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"item"`
 		}
 		if len(line) == 0 {
 			continue
@@ -90,6 +95,10 @@ func (r Runtime) Execute(ctx context.Context, req execution.Request) (execution.
 			thread = event.ThreadID
 		case "turn.completed":
 			completed = true
+		case "item.completed":
+			if event.Item.Type == "agent_message" {
+				reportedSummary = event.Item.Text
+			}
 		case "turn.failed":
 			failed = true
 			var detail struct {
@@ -115,5 +124,12 @@ func (r Runtime) Execute(ctx context.Context, req execution.Request) (execution.
 	if err != nil {
 		return execution.Result{}, fmt.Errorf("capture Codex output: %w", err)
 	}
-	return execution.Result{Outcome: execution.Succeeded, CandidateSHA: digest, StartedAt: started, FinishedAt: time.Now().UTC(), Summary: "Codex turn completed; verification remains required; thread " + thread}, nil
+	summary := "Codex turn completed; verification remains required; thread " + thread
+	if len(reportedSummary) > 4096 {
+		reportedSummary = reportedSummary[:4096]
+	}
+	if reportedSummary != "" {
+		summary += "; provider report: " + reportedSummary
+	}
+	return execution.Result{Outcome: execution.Succeeded, CandidateSHA: digest, StartedAt: started, FinishedAt: time.Now().UTC(), Summary: summary}, nil
 }

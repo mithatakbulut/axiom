@@ -70,6 +70,7 @@ Commands:
   proof show|export          Inspect or export verification evidence
   verify plan|run            Plan or run candidate verification
   work run                   Run a managed Codex job and verification
+  plan                      Create and manage a persistent plan
   chat start|begin|finish    Track work performed in the current chat
   vigil inspect|attach       Inspect or attach a Vigil session
   github receive|workflows   Process deliveries or inspect PR associations
@@ -105,6 +106,19 @@ Run 'verity COMMAND --help' for details.`,
 	"verify snapshot":   "Usage: verity verify snapshot <project-relative-path>...\n\nCapture the selected source files without Git.",
 	"work":              "Usage: verity work run <instruction-file> <source-path>...",
 	"work run":          "Usage: verity work run <instruction-file> <source-path>...\n\nRun a Codex turn, snapshot its output, and verify it.",
+	"plan":              "Usage: verity plan create|show|history|start|pause|resume|approve|reject|review|retry|abandon|reconcile [ARGS]",
+	"plan create":       "Usage: verity plan create <definition.json>\n\nValidate and save an explicit plan.",
+	"plan show":         "Usage: verity plan show <plan-id>\n\nShow a saved plan and its state as JSON.",
+	"plan history":      "Usage: verity plan history <plan-id>\n\nShow recorded workflow transitions.",
+	"plan start":        "Usage: verity plan start <plan-id>",
+	"plan pause":        "Usage: verity plan pause <plan-id>",
+	"plan resume":       "Usage: verity plan resume <plan-id>",
+	"plan approve":      "Usage: verity plan approve <plan-id> <task-id> <actor> <reason>",
+	"plan reject":       "Usage: verity plan reject <plan-id> <task-id> <actor> <reason>",
+	"plan abandon":      "Usage: verity plan abandon <plan-id> <task-id> <actor> <reason>",
+	"plan reconcile":    "Usage: verity plan reconcile <plan-id> <task-id> <outcome> <candidate-sha-or-empty> <actor> <reason>",
+	"plan retry":        "Usage: verity plan retry <plan-id> <task-id>",
+	"plan review":       "Usage: verity plan review <plan-id> <verification-id> <actor> <reason>",
 	"chat":              "Usage: verity chat start|begin|finish ...",
 	"chat start":        "Usage: verity chat start <feature|bugfix|documentation>",
 	"chat begin":        "Usage: verity chat begin <workflow-id> <task-id>",
@@ -125,7 +139,7 @@ func showHelp(args []string) error {
 }
 func validateArgs(args []string) error {
 	key := args[0]
-	if len(args) > 1 && (key == "dashboard" || key == "workflow" || key == "task" || key == "proof" || key == "verify" || key == "work" || key == "chat" || key == "vigil" || key == "config" || key == "github") {
+	if len(args) > 1 && (key == "dashboard" || key == "workflow" || key == "task" || key == "proof" || key == "verify" || key == "work" || key == "plan" || key == "chat" || key == "vigil" || key == "config" || key == "github") {
 		key += " " + args[1]
 	}
 	bounds := map[string][2]int{"dashboard summary": {2, 2}, "github receive": {5, 5}, "github workflows": {3, 3}, "version": {1, 1}, "init": {1, 2}, "doctor": {1, 2}, "config validate": {2, 3}, "workflow create": {5, 6}, "workflow list": {2, 3}, "workflow show": {3, 4}, "task list": {3, 4}, "proof show": {3, 4}, "proof export": {3, 5}, "vigil inspect": {4, -1}, "vigil attach": {4, -1}}
@@ -133,6 +147,17 @@ func validateArgs(args []string) error {
 	bounds["verify run"] = [2]int{6, 6}
 	bounds["verify snapshot"] = [2]int{3, -1}
 	bounds["work run"] = [2]int{4, -1}
+	bounds["plan create"] = [2]int{3, 3}
+	bounds["plan show"] = [2]int{3, 3}
+	bounds["plan history"] = [2]int{3, 3}
+	for _, name := range []string{"start", "pause", "resume"} {
+		bounds["plan "+name] = [2]int{3, 3}
+	}
+	for _, name := range []string{"approve", "reject", "abandon", "review"} {
+		bounds["plan "+name] = [2]int{6, 6}
+	}
+	bounds["plan reconcile"] = [2]int{8, 8}
+	bounds["plan retry"] = [2]int{4, 4}
 	bounds["chat start"] = [2]int{3, 3}
 	bounds["chat begin"] = [2]int{4, 4}
 	bounds["chat finish"] = [2]int{4, 4}

@@ -117,3 +117,5 @@ instruction is stored in the local attempt record. The command modifies the
 project through Codex, so select paths that cover the work; omitted paths are
 not verified. Jobs started directly in the Codex app are not automatically
 managed by this command.
+
+For sequential, durable multi-step work, see [persistent plans](docs/persistent-plans.md).

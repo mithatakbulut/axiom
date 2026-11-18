@@ -113,6 +113,8 @@ func run(args []string) error {
 		return verifyCommand(args, opts)
 	case "work":
 		return workCommand(args, opts)
+	case "plan":
+		return planCommand(args, opts)
 	case "chat":
 		return chatCommand(args, opts)
 	case "vigil":

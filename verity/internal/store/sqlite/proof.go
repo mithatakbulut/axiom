@@ -110,3 +110,27 @@ func (s *Store) Verification(ctx context.Context, id string) (verification.Run, 
 	err = json.Unmarshal([]byte(b), &r)
 	return r, err
 }
+
+// TaskVerifications returns the persisted proof history for a workflow task.
+func (s *Store) TaskVerifications(ctx context.Context, wf, task string) ([]verification.Run, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT body FROM verification_runs WHERE workflow_id=? ORDER BY rowid`, wf)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var runs []verification.Run
+	for rows.Next() {
+		var body string
+		var run verification.Run
+		if err := rows.Scan(&body); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(body), &run); err != nil {
+			return nil, err
+		}
+		if run.TaskID == task {
+			runs = append(runs, run)
+		}
+	}
+	return runs, rows.Err()
+}

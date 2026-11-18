@@ -4,6 +4,8 @@ package control
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -37,23 +39,92 @@ type Task struct {
 	Title              string    `json:"title"`
 	Description        string    `json:"description,omitempty"`
 	AcceptanceCriteria []string  `json:"acceptance_criteria,omitempty"`
+	SourcePaths        []string  `json:"source_paths,omitempty"`
 	TimeoutSeconds     int       `json:"timeout_seconds,omitempty"`
 	DependsOn          []string  `json:"depends_on,omitempty"`
 	Approval           bool      `json:"approval,omitempty"`
+	ApprovalActor      string    `json:"approval_actor,omitempty"`
+	ApprovalReason     string    `json:"approval_reason,omitempty"`
 	MaxAttempts        int       `json:"max_attempts"`
 	Attempts           int       `json:"attempts"`
 	State              TaskState `json:"state"`
 }
 type Definition struct {
-	SchemaVersion  int    `json:"schema_version"`
-	ID             string `json:"id"`
-	Name           string `json:"name"`
-	Version        int    `json:"version"`
-	Tasks          []Task `json:"tasks"`
-	MaxTasks       int    `json:"max_tasks"`
-	MaxAttempts    int    `json:"max_attempts"`
-	MaxTransitions int    `json:"max_transitions"`
+	SchemaVersion        int      `json:"schema_version"`
+	ID                   string   `json:"id"`
+	Name                 string   `json:"name"`
+	Goal                 string   `json:"goal,omitempty"`
+	AcceptanceCriteria   []string `json:"acceptance_criteria,omitempty"`
+	SourcePaths          []string `json:"source_paths,omitempty"`
+	VerificationManifest string   `json:"verification_manifest,omitempty"`
+	Version              int      `json:"version"`
+	Tasks                []Task   `json:"tasks"`
+	MaxTasks             int      `json:"max_tasks"`
+	MaxAttempts          int      `json:"max_attempts"`
+	MaxTransitions       int      `json:"max_transitions"`
 }
+
+// ValidatePlan applies the stricter requirements for explicitly authored plans.
+// Existing workflow templates continue to use Validate.
+func (d Definition) ValidatePlan() error {
+	if err := d.Validate(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(d.Goal) == "" || !nonempty(d.AcceptanceCriteria) || !nonempty(d.SourcePaths) {
+		return fmt.Errorf("%w: plan requires a goal, acceptance criteria and source paths", ErrInvalid)
+	}
+	for _, path := range d.SourcePaths {
+		if !validPlanPath(path) {
+			return fmt.Errorf("%w: invalid plan source path %q", ErrInvalid, path)
+		}
+	}
+	for _, t := range d.Tasks {
+		if strings.TrimSpace(t.Description) == "" || !nonempty(t.AcceptanceCriteria) {
+			return fmt.Errorf("%w: task %q requires a description and acceptance criteria", ErrInvalid, t.ID)
+		}
+		if !t.Approval && (t.TimeoutSeconds <= 0 || t.TimeoutSeconds > 86400 || !nonempty(t.SourcePaths)) {
+			return fmt.Errorf("%w: task %q requires a timeout and source paths", ErrInvalid, t.ID)
+		}
+		for _, path := range t.SourcePaths {
+			if !validPlanPath(path) {
+				return fmt.Errorf("%w: invalid task source path %q", ErrInvalid, path)
+			}
+			covered := false
+			for _, overall := range d.SourcePaths {
+				rel, err := filepath.Rel(filepath.Clean(overall), filepath.Clean(path))
+				if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+					covered = true
+					break
+				}
+			}
+			if !covered {
+				return fmt.Errorf("%w: task %q source path %q is outside plan scope", ErrInvalid, t.ID, path)
+			}
+		}
+	}
+	return nil
+}
+
+func validPlanPath(path string) bool {
+	if strings.TrimSpace(path) == "" || filepath.IsAbs(path) {
+		return false
+	}
+	clean := filepath.Clean(path)
+	return clean != "." && clean != ".." && !strings.HasPrefix(clean, ".."+string(filepath.Separator))
+}
+
+func nonempty(items []string) bool {
+	if len(items) == 0 {
+		return false
+	}
+	for _, item := range items {
+		if strings.TrimSpace(item) == "" {
+			return false
+		}
+	}
+	return true
+}
+
 type Run struct {
 	ID                string        `json:"id"`
 	DefinitionID      string        `json:"definition_id"`
@@ -219,6 +290,47 @@ func (r *Run) Schedule() ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// ScheduleOne selects the first eligible task in definition order, including
+// approval tasks, without exposing later independent tasks to the scheduler.
+func (r *Run) ScheduleOne() (string, error) {
+	if r.State != Running {
+		return "", fmt.Errorf("cannot schedule run from %s", r.State)
+	}
+	completed := map[string]bool{}
+	for _, t := range r.Tasks {
+		completed[t.ID] = t.State == TaskCompleted
+	}
+	for i := range r.Tasks {
+		t := &r.Tasks[i]
+		if t.State == TaskReady {
+			return t.ID, nil
+		}
+		if t.State != Pending {
+			continue
+		}
+		ready := true
+		for _, dep := range t.DependsOn {
+			if !completed[dep] {
+				ready = false
+				break
+			}
+		}
+		if !ready {
+			continue
+		}
+		if err := r.advance(); err != nil {
+			return "", err
+		}
+		if t.Approval {
+			t.State, r.State = TaskWaiting, Waiting
+		} else {
+			t.State = TaskReady
+		}
+		return t.ID, nil
+	}
+	return "", nil
 }
 func (r *Run) Approve(taskID string, approved bool) error {
 	if r.State != Waiting {

@@ -43,6 +43,10 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	_, err = s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS process_run_history(id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL REFERENCES process_runs(id), transitions INTEGER NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL); CREATE TRIGGER IF NOT EXISTS process_run_history_no_update BEFORE UPDATE ON process_run_history BEGIN SELECT RAISE(ABORT, 'process run history is append-only'); END; CREATE TRIGGER IF NOT EXISTS process_run_history_no_delete BEFORE DELETE ON process_run_history BEGIN SELECT RAISE(ABORT, 'process run history is append-only'); END;`)
+	if err != nil {
+		return err
+	}
 	_, err = s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS execution_attempts(id TEXT PRIMARY KEY,workflow_id TEXT NOT NULL,task_id TEXT NOT NULL,attempt INTEGER NOT NULL,provider TEXT NOT NULL,body TEXT NOT NULL,created_at TEXT NOT NULL,UNIQUE(task_id,attempt)); CREATE TABLE IF NOT EXISTS execution_attempt_events(id INTEGER PRIMARY KEY AUTOINCREMENT,attempt_id TEXT NOT NULL REFERENCES execution_attempts(id),kind TEXT NOT NULL,state TEXT NOT NULL,payload TEXT NOT NULL,actor TEXT NOT NULL,reason TEXT NOT NULL,created_at TEXT NOT NULL); CREATE INDEX IF NOT EXISTS execution_attempt_events_latest ON execution_attempt_events(attempt_id,id); CREATE TRIGGER IF NOT EXISTS execution_attempt_events_no_update BEFORE UPDATE ON execution_attempt_events BEGIN SELECT RAISE(ABORT, 'execution attempt events are append-only'); END; CREATE TRIGGER IF NOT EXISTS execution_attempt_events_no_delete BEFORE DELETE ON execution_attempt_events BEGIN SELECT RAISE(ABORT, 'execution attempt events are append-only'); END; INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES(6,CURRENT_TIMESTAMP);`)
 	if err != nil {
 		return err

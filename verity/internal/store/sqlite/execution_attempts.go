@@ -221,6 +221,46 @@ func (s *Store) ExecutionAttempt(ctx context.Context, id string) (execution.Dura
 	return a, nil
 }
 
+// LatestExecutionAttempt returns the last durable invocation for a plan task.
+func (s *Store) LatestExecutionAttempt(ctx context.Context, workflowID, taskID string) (execution.DurableAttempt, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM execution_attempts WHERE workflow_id=? AND task_id=? ORDER BY attempt DESC LIMIT 1`, workflowID, taskID).Scan(&id)
+	if err != nil {
+		return execution.DurableAttempt{}, err
+	}
+	return s.ExecutionAttempt(ctx, id)
+}
+
+func (s *Store) TaskExecutionAttempts(ctx context.Context, workflowID, taskID string) ([]execution.DurableAttempt, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM execution_attempts WHERE workflow_id=? AND task_id=? ORDER BY attempt`, workflowID, taskID)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	var attempts []execution.DurableAttempt
+	for _, id := range ids {
+		a, err := s.ExecutionAttempt(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		attempts = append(attempts, a)
+	}
+	return attempts, nil
+}
+
 type executionQuerier interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 	ExecContext(context.Context, string, ...any) (sql.Result, error)

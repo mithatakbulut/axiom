@@ -39,6 +39,39 @@ func (s *Store) CreateRun(ctx context.Context, r control.Run) error {
 	_, err = s.db.ExecContext(ctx, "INSERT INTO process_runs VALUES(?,?,?,?)", r.ID, r.DefinitionID, r.DefinitionVersion, string(b))
 	return err
 }
+
+// CreatePlan saves the definition and its initial run atomically.
+func (s *Store) CreatePlan(ctx context.Context, d control.Definition, r control.Run) error {
+	if err := d.ValidatePlan(); err != nil {
+		return err
+	}
+	if r.ID != d.ID || r.DefinitionID != d.ID || r.DefinitionVersion != d.Version {
+		return fmt.Errorf("plan definition and run do not match")
+	}
+	definition, err := json.Marshal(d)
+	if err != nil {
+		return err
+	}
+	run, err := json.Marshal(r)
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, "INSERT INTO process_definitions(id,version,body) VALUES(?,?,?)", d.ID, d.Version, string(definition)); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "INSERT INTO process_runs VALUES(?,?,?,?)", r.ID, r.DefinitionID, r.DefinitionVersion, string(run)); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "INSERT INTO process_run_history(run_id,transitions,body,created_at) VALUES(?,?,?,?)", r.ID, r.Transitions, string(run), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
 func (s *Store) GetRun(ctx context.Context, id string) (control.Run, error) {
 	var r control.Run
 	var b string
@@ -56,7 +89,12 @@ func (s *Store) UpdateRun(ctx context.Context, r control.Run, expectedTransition
 	if err != nil {
 		return err
 	}
-	res, err := s.db.ExecContext(ctx, "UPDATE process_runs SET body=? WHERE id=? AND json_extract(body,'$.transitions')=?", string(b), r.ID, expectedTransitions)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, "UPDATE process_runs SET body=? WHERE id=? AND json_extract(body,'$.transitions')=?", string(b), r.ID, expectedTransitions)
 	if err != nil {
 		return err
 	}
@@ -64,7 +102,33 @@ func (s *Store) UpdateRun(ctx context.Context, r control.Run, expectedTransition
 	if n != 1 {
 		return fmt.Errorf("run changed concurrently or not found")
 	}
-	return nil
+	if r.Definition.VerificationManifest != "" {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO process_run_history(run_id,transitions,body,created_at) VALUES(?,?,?,?)", r.ID, r.Transitions, string(b), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) RunHistory(ctx context.Context, id string) ([]control.Run, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT body FROM process_run_history WHERE run_id=? ORDER BY id", id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var history []control.Run
+	for rows.Next() {
+		var body string
+		var r control.Run
+		if err = rows.Scan(&body); err != nil {
+			return nil, err
+		}
+		if err = json.Unmarshal([]byte(body), &r); err != nil {
+			return nil, err
+		}
+		history = append(history, r)
+	}
+	return history, rows.Err()
 }
 func (s *Store) AcquireLease(ctx context.Context, runID, owner string, now time.Time, ttl time.Duration) (control.Lease, error) {
 	if owner == "" || ttl <= 0 {
