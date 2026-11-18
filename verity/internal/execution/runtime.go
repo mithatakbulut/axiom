@@ -39,6 +39,7 @@ func (f FakeRuntime) Execute(ctx context.Context, req Request) (Result, error) {
 	result := Result{Outcome: outcome, StartedAt: started, FinishedAt: time.Now().UTC(), Summary: "deterministic fake runtime; no repository changes"}
 	if outcome == Succeeded {
 		result.CandidateSHA = req.BaseSHA
+		result.Candidate = req.BaseCandidate
 	}
 	return result, nil
 }
@@ -90,6 +91,9 @@ func RunDurable(ctx context.Context, provider AgentRuntime, req Request, store D
 	if err := req.Validate(); err != nil {
 		return Result{}, err
 	}
+	if req.BaseCandidate.IsZero() {
+		return Result{}, fmt.Errorf("%w: durable execution requires a typed base candidate", ErrInvalid)
+	}
 	if provider == nil {
 		return Result{}, fmt.Errorf("nil runtime")
 	}
@@ -101,7 +105,7 @@ func RunDurable(ctx context.Context, provider AgentRuntime, req Request, store D
 		return Result{}, fmt.Errorf("runtime returned empty provider name")
 	}
 	created := time.Now().UTC()
-	if err = store.CreateExecutionAttempt(ctx, DurableAttempt{Request: req, Provider: caps.Provider, CreatedAt: created, State: AttemptRunning}); err != nil {
+	if err = store.CreateExecutionAttempt(ctx, DurableAttempt{SchemaVersion: CurrentAttemptSchemaVersion, Request: req, Provider: caps.Provider, CreatedAt: created, State: AttemptRunning}); err != nil {
 		return Result{}, err
 	}
 	result, err := Run(ctx, provider, req, nil)
@@ -174,6 +178,9 @@ func Run(ctx context.Context, provider AgentRuntime, req Request, tracker *Track
 	}
 	if err := result.Validate(); err != nil {
 		return Result{}, err
+	}
+	if !req.BaseCandidate.IsZero() && result.Outcome == Succeeded && result.Candidate.IsZero() {
+		return Result{}, fmt.Errorf("%w: typed execution result omitted candidate identity", ErrInvalid)
 	}
 	if tracker != nil {
 		if err := tracker.Record(Attempt{Request: req, Result: result, Provider: caps.Provider}); err != nil {

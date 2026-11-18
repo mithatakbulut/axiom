@@ -6,9 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"verity/internal/candidate"
 )
 
 var ErrInvalid = errors.New("invalid execution record")
+
+const CurrentAttemptSchemaVersion = 2
 
 type Outcome string
 
@@ -23,6 +27,7 @@ const (
 
 type Request struct {
 	ID, WorkflowID, TaskID, Workspace string
+	BaseCandidate                     candidate.Identity `json:"base_candidate,omitempty"`
 	Attempt                           int
 	BaseSHA                           string
 	Timeout                           time.Duration
@@ -32,6 +37,8 @@ type Request struct {
 type Result struct {
 	Outcome               Outcome
 	CandidateSHA          string
+	Candidate             candidate.Identity `json:"candidate,omitempty"`
+	SessionID             string             `json:"session_id,omitempty"`
 	Summary               string
 	StartedAt, FinishedAt time.Time
 }
@@ -39,6 +46,11 @@ type Result struct {
 func (r Request) Validate() error {
 	if r.ID == "" || r.WorkflowID == "" || r.TaskID == "" || r.Workspace == "" || r.Attempt < 1 || !validSHA(r.BaseSHA) || r.Timeout <= 0 {
 		return ErrInvalid
+	}
+	if !r.BaseCandidate.IsZero() {
+		if r.BaseCandidate.Validate() != nil || r.BaseCandidate.ID != r.BaseSHA {
+			return fmt.Errorf("%w: base candidate identity does not match base SHA", ErrInvalid)
+		}
 	}
 	return nil
 }
@@ -54,6 +66,11 @@ func (r Result) Validate() error {
 	}
 	if r.CandidateSHA != "" && !validSHA(r.CandidateSHA) {
 		return ErrInvalid
+	}
+	if !r.Candidate.IsZero() {
+		if r.Candidate.Validate() != nil || r.Candidate.ID != r.CandidateSHA {
+			return fmt.Errorf("%w: typed candidate identity does not match candidate SHA", ErrInvalid)
+		}
 	}
 	if r.Outcome == Succeeded && r.CandidateSHA == "" {
 		return fmt.Errorf("%w: success needs candidate SHA", ErrInvalid)
@@ -93,20 +110,22 @@ const (
 // DurableAttempt is the persisted invocation intent. State and Result are
 // projections of append-only store events and are not provider assertions.
 type DurableAttempt struct {
-	Request   Request      `json:"request"`
-	Provider  string       `json:"provider"`
-	CreatedAt time.Time    `json:"created_at"`
-	State     AttemptState `json:"state"`
-	Result    *Result      `json:"result,omitempty"`
+	SchemaVersion int          `json:"schema_version"`
+	Request       Request      `json:"request"`
+	Provider      string       `json:"provider"`
+	CreatedAt     time.Time    `json:"created_at"`
+	State         AttemptState `json:"state"`
+	Result        *Result      `json:"result,omitempty"`
 }
 
 type Reconciliation struct {
-	Outcome      Outcome   `json:"outcome"`
-	CandidateSHA string    `json:"candidate_sha,omitempty"`
-	Actor        string    `json:"actor"`
-	Reason       string    `json:"reason"`
-	EvidenceRef  string    `json:"evidence_ref,omitempty"`
-	At           time.Time `json:"at"`
+	Outcome      Outcome            `json:"outcome"`
+	CandidateSHA string             `json:"candidate_sha,omitempty"`
+	Candidate    candidate.Identity `json:"candidate,omitempty"`
+	Actor        string             `json:"actor"`
+	Reason       string             `json:"reason"`
+	EvidenceRef  string             `json:"evidence_ref,omitempty"`
+	At           time.Time          `json:"at"`
 }
 
 func (r Reconciliation) Validate() error {
@@ -120,6 +139,9 @@ func (r Reconciliation) Validate() error {
 	}
 	if r.CandidateSHA != "" && !validSHA(r.CandidateSHA) {
 		return ErrInvalid
+	}
+	if !r.Candidate.IsZero() && (r.Candidate.Validate() != nil || r.Candidate.ID != r.CandidateSHA) {
+		return fmt.Errorf("%w: typed reconciliation candidate does not match candidate SHA", ErrInvalid)
 	}
 	if r.Outcome == Succeeded && r.CandidateSHA == "" {
 		return ErrInvalid

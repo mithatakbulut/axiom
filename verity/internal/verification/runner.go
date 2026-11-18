@@ -16,10 +16,17 @@ import (
 
 const defaultOutputLimit = 1 << 20
 const defaultArchiveLimit = 512 << 20
+const defaultSnapshotEntryLimit = 50_000
+const snapshotOwnerMarker = ".verity-snapshot-owner"
+const snapshotOwnerMarkerValue = "verity-snapshot-owner-v1\n"
 
 // Snapshotter produces an isolated tree for the requested immutable revision.
 type Snapshotter interface {
 	Snapshot(context.Context, string, string) (path string, cleanup func(), err error)
+}
+
+type CheckRunner interface {
+	Execute(context.Context, string, Plan, bool) ([]CheckResult, error)
 }
 
 // GitSnapshotter materializes a commit with git archive. Checks can alter the
@@ -30,6 +37,16 @@ func (s GitSnapshotter) Snapshot(ctx context.Context, repository, revision strin
 	if !validRevision(revision) {
 		return "", nil, ErrInvalidCandidate
 	}
+	release, err := acquireSnapshotSlot(ctx)
+	if err != nil {
+		return "", nil, err
+	}
+	releaseOnReturn := true
+	defer func() {
+		if releaseOnReturn {
+			release()
+		}
+	}()
 	root, err := filepath.Abs(repository)
 	if err != nil {
 		return "", nil, err
@@ -59,16 +76,62 @@ func (s GitSnapshotter) Snapshot(ctx context.Context, repository, revision strin
 	if archiveData.truncated {
 		return "", nil, ErrArchiveTooLarge
 	}
-	return unpackSnapshot(archiveData.Bytes())
-}
-
-func unpackSnapshot(data []byte) (string, func(), error) {
-	dir, err := os.MkdirTemp("", "verity-verify-*")
+	dir, cleanup, err := unpackSnapshotLocked(archiveData.Bytes(), defaultArchiveLimit, defaultArchiveLimit, defaultSnapshotEntryLimit)
 	if err != nil {
 		return "", nil, err
 	}
-	cleanup := func() { _ = os.RemoveAll(dir) }
+	releaseOnReturn = false
+	return dir, func() {
+		cleanup()
+		release()
+	}, nil
+}
+
+func unpackSnapshot(data []byte) (string, func(), error) {
+	return unpackSnapshotWithLimitsContext(context.Background(), data, defaultArchiveLimit, defaultArchiveLimit, defaultSnapshotEntryLimit)
+}
+
+func unpackSnapshotWithLimits(data []byte, archiveLimit, contentLimit int64, entryLimit int) (string, func(), error) {
+	return unpackSnapshotWithLimitsContext(context.Background(), data, archiveLimit, contentLimit, entryLimit)
+}
+
+func unpackSnapshotWithLimitsContext(ctx context.Context, data []byte, archiveLimit, contentLimit int64, entryLimit int) (string, func(), error) {
+	release, err := acquireSnapshotSlot(ctx)
+	if err != nil {
+		return "", nil, err
+	}
+	dir, cleanup, err := unpackSnapshotLocked(data, archiveLimit, contentLimit, entryLimit)
+	if err != nil {
+		release()
+		return "", nil, err
+	}
+	return dir, func() {
+		cleanup()
+		release()
+	}, nil
+}
+
+func unpackSnapshotLocked(data []byte, archiveLimit, contentLimit int64, entryLimit int) (string, func(), error) {
+	if archiveLimit <= 0 || contentLimit <= 0 || entryLimit <= 0 || int64(len(data)) > archiveLimit {
+		return "", nil, ErrSnapshotQuotaExceeded
+	}
+	leaseDir, err := os.MkdirTemp("", "verity-candidate-snapshot-*")
+	if err != nil {
+		return "", nil, err
+	}
+	cleanup := func() { _ = os.RemoveAll(leaseDir) }
+	if err := os.WriteFile(filepath.Join(leaseDir, snapshotOwnerMarker), []byte(snapshotOwnerMarkerValue), 0o600); err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	dir := filepath.Join(leaseDir, "source")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		cleanup()
+		return "", nil, err
+	}
 	tr := tar.NewReader(bytes.NewReader(data))
+	var extracted int64
+	entries := 0
 	for {
 		h, e := tr.Next()
 		if e == io.EOF {
@@ -77,6 +140,11 @@ func unpackSnapshot(data []byte) (string, func(), error) {
 		if e != nil {
 			cleanup()
 			return "", nil, e
+		}
+		entries++
+		if entries > entryLimit {
+			cleanup()
+			return "", nil, ErrSnapshotQuotaExceeded
 		}
 		name := filepath.Clean(filepath.FromSlash(h.Name))
 		if name == "." || filepath.IsAbs(name) || name == ".." || strings.HasPrefix(name, ".."+string(filepath.Separator)) {
@@ -94,6 +162,10 @@ func unpackSnapshot(data []byte) (string, func(), error) {
 		case tar.TypeDir:
 			e = os.MkdirAll(target, 0700)
 		case tar.TypeReg, tar.TypeRegA:
+			if h.Size < 0 || h.Size > contentLimit-extracted {
+				e = ErrSnapshotQuotaExceeded
+				break
+			}
 			if e = os.MkdirAll(filepath.Dir(target), 0700); e == nil {
 				var f *os.File
 				mode := os.FileMode(0600)
@@ -102,9 +174,16 @@ func unpackSnapshot(data []byte) (string, func(), error) {
 				}
 				f, e = os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 				if e == nil {
-					_, e = io.Copy(f, io.LimitReader(tr, h.Size))
+					copied, copyErr := io.CopyN(f, tr, h.Size)
+					e = copyErr
+					if e == nil && copied != h.Size {
+						e = io.ErrUnexpectedEOF
+					}
 					if closeErr := f.Close(); e == nil {
 						e = closeErr
+					}
+					if e == nil {
+						extracted += copied
 					}
 				}
 			}
@@ -132,30 +211,39 @@ func (r CommandRunner) Execute(ctx context.Context, repository string, plan Plan
 	if !approved {
 		return nil, ErrNotApproved
 	}
+	if plan.TrustLevel == TrustUntrusted && plan.IsolationPolicy != IsolationRootlessContainer {
+		return blockedChecks(plan, "untrusted checks require rootless container isolation"), nil
+	}
+	if plan.IsolationPolicy == IsolationRootlessContainer {
+		return (ContainerRunner{Snapshotter: r.Snapshotter, OutputLimit: r.OutputLimit}).Execute(ctx, repository, plan, true)
+	}
 	if !validRevision(plan.CandidateSHA) {
 		return nil, ErrInvalidCandidate
+	}
+	if plan.IsolationPolicy != IsolationLocalProcess {
+		return nil, ErrUnsupportedIsolation
 	}
 	s := r.Snapshotter
 	if s == nil {
 		s = GitSnapshotter{}
 	}
-	path, cleanup, err := s.Snapshot(ctx, repository, plan.CandidateSHA)
-	if err != nil {
-		return nil, err
-	}
-	defer cleanup()
 	limit := r.OutputLimit
 	if limit <= 0 {
 		limit = defaultOutputLimit
 	}
 	results := make([]CheckResult, 0, len(plan.Checks))
 	for _, check := range plan.Checks {
+		path, cleanup, err := s.Snapshot(ctx, repository, plan.CandidateSHA)
+		if err != nil {
+			return nil, err
+		}
 		result := CheckResult{ID: check.ID, Name: check.Name, Required: check.Required, CriteriaIDs: append([]string(nil), check.CriteriaIDs...), StartedAt: time.Now().UTC()}
 		if len(check.Argv) == 0 || check.Timeout <= 0 {
 			result.Outcome = Blocked
 			result.Diagnostic = "invalid planned command or timeout"
 			result.FinishedAt = time.Now().UTC()
 			results = append(results, result)
+			cleanup()
 			continue
 		}
 		checkCtx, cancel := context.WithTimeout(ctx, check.Timeout)
@@ -174,9 +262,9 @@ func (r CommandRunner) Execute(ctx context.Context, repository string, plan Plan
 		out.limit = limit
 		cmd.Stdout = &out
 		cmd.Stderr = &out
-		err := cmd.Run()
+		err = cmd.Run()
 		cancel()
-		result.Output = out.String()
+		result.Output = redactKnownSecrets(out.String())
 		result.FinishedAt = time.Now().UTC()
 		if err == nil {
 			result.Outcome = Passed
@@ -201,6 +289,7 @@ func (r CommandRunner) Execute(ctx context.Context, repository string, plan Plan
 			}
 		}
 		results = append(results, result)
+		cleanup()
 		if ctx.Err() != nil {
 			for _, pending := range plan.Checks[len(results):] {
 				results = append(results, CheckResult{ID: pending.ID, Name: pending.Name, Required: pending.Required, Outcome: Blocked, Diagnostic: "verification cancelled", CriteriaIDs: pending.CriteriaIDs})

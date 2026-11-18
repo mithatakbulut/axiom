@@ -14,6 +14,7 @@ import (
 
 	"verity/internal/domain"
 	"verity/internal/execution"
+	"verity/internal/orchestration"
 	"verity/internal/process/control"
 	"verity/internal/store/sqlite"
 	"verity/internal/verification"
@@ -204,7 +205,7 @@ func planAction(ctx context.Context, root, dataDir, model string, db *sqlite.Sto
 		if strings.TrimSpace(args[4]) == "" || strings.TrimSpace(args[5]) == "" {
 			return errors.New("actor and reason are required")
 		}
-		unlock, e := planLock(root, run.ID)
+		unlock, e := orchestration.Lock(root, run.ID)
 		if e != nil {
 			return e
 		}
@@ -228,7 +229,7 @@ func planAction(ctx context.Context, root, dataDir, model string, db *sqlite.Sto
 		}
 		return json.NewEncoder(os.Stdout).Encode(run)
 	case "abandon", "reconcile":
-		unlock, e := planLock(root, run.ID)
+		unlock, e := orchestration.Lock(root, run.ID)
 		if e != nil {
 			return e
 		}
@@ -243,7 +244,7 @@ func planAction(ctx context.Context, root, dataDir, model string, db *sqlite.Sto
 		r := execution.Reconciliation{Outcome: execution.Outcome(args[4]), CandidateSHA: args[5], Actor: args[6], Reason: args[7], At: time.Now().UTC()}
 		return db.ReconcileExecutionAttempt(ctx, a.Request.ID, r)
 	case "retry":
-		unlock, e := planLock(root, run.ID)
+		unlock, e := orchestration.Lock(root, run.ID)
 		if e != nil {
 			return e
 		}
@@ -274,7 +275,7 @@ func planAction(ctx context.Context, root, dataDir, model string, db *sqlite.Sto
 		if strings.TrimSpace(args[4]) == "" || strings.TrimSpace(args[5]) == "" {
 			return errors.New("actor and reason are required")
 		}
-		unlock, e := planLock(root, run.ID)
+		unlock, e := orchestration.Lock(root, run.ID)
 		if e != nil {
 			return e
 		}

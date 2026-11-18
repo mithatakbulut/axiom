@@ -4,12 +4,31 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"verity/internal/candidate"
 )
 
 const sha = "0123456789abcdef0123456789abcdef01234567"
 
 func request() Request {
 	return Request{ID: "exec-1", WorkflowID: "wf-1", TaskID: "task-1", Workspace: "/tmp/ws", Attempt: 1, BaseSHA: sha, Timeout: time.Second}
+}
+
+func TestTypedBaseCandidateFlowsThroughRuntime(t *testing.T) {
+	base := candidate.Identity{SchemaVersion: 1, Kind: candidate.GitCommit, ID: sha, Repository: "file:///workspace", CapturedAt: time.Now().UTC(), Provenance: "git:HEAD"}
+	req := request()
+	req.BaseCandidate = base
+	result, err := Run(context.Background(), FakeRuntime{}, req, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Candidate != base {
+		t.Fatalf("typed candidate did not flow through execution: got %+v want %+v", result.Candidate, base)
+	}
+	req.BaseCandidate.ID = "1123456789abcdef0123456789abcdef01234567"
+	if err := req.Validate(); err == nil {
+		t.Fatal("accepted typed base identity that differs from BaseSHA")
+	}
 }
 
 func TestFakeRuntimeRecordsCandidateButNotAcceptance(t *testing.T) {

@@ -2,9 +2,14 @@ package verification
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
+
+	candidatepkg "verity/internal/candidate"
 )
 
 // ReviewResult is advisory input. It cannot turn a failed or missing check into a pass.
@@ -29,9 +34,12 @@ type CurrentCandidate interface {
 	Current(context.Context) (string, error)
 }
 type Engine struct {
-	Runner    CommandRunner
-	Candidate CurrentCandidate
-	Now       func() time.Time
+	Runner              CheckRunner
+	Candidate           CurrentCandidate
+	CandidateKind       CandidateKind
+	CandidateBase       string
+	CandidateRepository string
+	Now                 func() time.Time
 }
 
 // Verify executes an explicitly approved plan and evaluates evidence against
@@ -49,7 +57,17 @@ func (e Engine) Verify(ctx context.Context, repository, runID, workflowID, taskI
 	if now == nil {
 		now = time.Now
 	}
-	run := Run{ID: runID, SchemaVersion: 1, WorkflowID: workflowID, TaskID: taskID, CandidateSHA: candidate, Profile: profile, Criteria: append([]Criterion(nil), m.Criteria...), StartedAt: now().UTC()}
+	startedAt := now().UTC()
+	run := Run{ID: runID, SchemaVersion: CurrentRunSchemaVersion, WorkflowID: workflowID, TaskID: taskID, CandidateKind: e.CandidateKind, CandidateSHA: candidate, CandidateBase: e.CandidateBase, CandidateRepository: e.CandidateRepository, TrustLevel: plan.TrustLevel, IsolationPolicy: plan.IsolationPolicy, ContainerImage: plan.ContainerImage, NetworkAllowlist: append([]string(nil), plan.NetworkAllowlist...), Profile: profile, Criteria: append([]Criterion(nil), m.Criteria...), StartedAt: startedAt}
+	if e.CandidateKind != "" {
+		run.Candidate = candidatepkg.Identity{SchemaVersion: 1, Kind: e.CandidateKind, ID: candidate, Repository: e.CandidateRepository, BaseRevision: e.CandidateBase, CapturedAt: startedAt, Provenance: "verification-engine:" + runID}
+	}
+	manifestJSON, err := json.Marshal(m)
+	if err != nil {
+		return Run{}, fmt.Errorf("serialize verification manifest: %w", err)
+	}
+	manifestDigest := sha256.Sum256(manifestJSON)
+	run.ManifestSHA256 = hex.EncodeToString(manifestDigest[:])
 	if e.Candidate != nil {
 		current, resolveErr := e.Candidate.Current(ctx)
 		if resolveErr != nil {
@@ -61,9 +79,40 @@ func (e Engine) Verify(ctx context.Context, repository, runID, workflowID, taskI
 			return run, nil
 		}
 	}
-	checks, err := e.Runner.Execute(ctx, repository, plan, true)
+	runner := e.Runner
+	if runner == nil {
+		runner = CommandRunner{}
+	}
+	var checks []CheckResult
+	if plan.TrustLevel == TrustUntrusted || plan.IsolationPolicy == IsolationRootlessContainer {
+		switch runner.(type) {
+		case CommandRunner, *CommandRunner, ContainerRunner, *ContainerRunner:
+			checks, err = runner.Execute(ctx, repository, plan, true)
+		default:
+			checks = blockedChecks(plan, "configured verification runner does not provide rootless container isolation")
+		}
+	} else {
+		checks, err = runner.Execute(ctx, repository, plan, true)
+	}
 	if err != nil {
 		return Run{}, err
+	}
+	type checkPolicy struct {
+		credentials []PlannedCredential
+		network     []string
+	}
+	checkPolicies := make(map[string]checkPolicy, len(plan.Checks))
+	for _, check := range plan.Checks {
+		network := plan.NetworkAllowlist
+		if len(check.NetworkAllowlist) > 0 {
+			network = check.NetworkAllowlist
+		}
+		checkPolicies[check.ID] = checkPolicy{credentials: append([]PlannedCredential(nil), check.Credentials...), network: append([]string(nil), network...)}
+	}
+	for i := range checks {
+		policy := checkPolicies[checks[i].ID]
+		checks[i].CredentialBindings = policy.credentials
+		checks[i].NetworkAllowlist = policy.network
 	}
 	run.Checks = checks
 	if e.Candidate != nil {

@@ -15,13 +15,21 @@
 | Verification is reused for a changed candidate | Each verification run requires a full immutable revision. |
 | Evidence is altered after capture | Evidence records include a SHA-256 content digest. |
 | Repository content injects commands | Verification commands are displayed before execution, passed as argv without a shell, and run only after explicit plan approval in a disposable candidate snapshot with bounded time/output. |
-| Secret leaks into proof | Evidence records store provenance and digest, while artifact bytes live separately. Explicit redaction is available before capture; callers remain responsible for filtering sensitive output. |
+| Untrusted check reads ambient host credentials or reaches an unapproved network destination | Opt into Linux rootless Docker: direct container networking is disabled, no host-home mount or ambient credentials are supplied, and the image is digest-pinned. Exact DNS host/port allowlists route CONNECT traffic through a constrained host broker that rejects non-public/reserved IPs and checks TLS SNI. An explicit short-lived test credential may be released only to one opted-in Playwright scenario, whose egress is narrowed to its HTTPS base host; scenario code can read that value. Without an allowlist, no broker or host path is mounted. Missing isolation blocks. Host snapshots have a 512 MiB/50,000-entry limit, and a per-user Unix file lock serializes active host snapshot/archive staging across Verity processes sharing the same temp directory. Real malicious-container runtime coverage remains open. |
+| Candidate replaces its own verification policy or local CLI config | Git-candidate verification rejects trees containing `.verity/verification.yaml` or `.verity/config.yaml`; the active local files are bound into the approval digest. Keep these control files out of candidate source. |
+| Secret leaks into proof | Verification command output is bounded and common credential formats are redacted before it is persisted as evidence. Checks receive a reduced environment and must never receive provider credentials; redaction is defense in depth and cannot identify every secret format. |
 | Vigil data is treated as Verity authority | The optional Verity-owned MCP client reads Vigil snapshots and records explicit links; neither snapshots nor links prove execution or grant approval. Verity does not depend on the Vigil database. |
 | Cleanup removes user work | Git cleanup requires an adjacent Verity ownership marker, matching Git common directory, and clean status; dirty worktrees are retained. |
 | Runtime outlives its task budget | Runtime calls receive a derived context with the request timeout and parent cancellation. |
 | Manual completion is mistaken for acceptance | Manual handoff returns `BLOCKED` without a candidate SHA; execution records do not pass verification. |
 
 ## Open work
+
+The supported local target is macOS with trusted repositories. Verification
+commands run with the Verity user's file and network permissions; reduced
+environment and disposable snapshots are not OS sandboxing. Review commands
+before approval and do not run untrusted PR code. Linux rootless containers
+are an optional future deployment path, not part of macOS-local acceptance.
 
 Execution runtimes remain deterministic fake/manual adapters; they do not
 launch agents. The Phase 4 check runner now executes repository commands in

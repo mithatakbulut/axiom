@@ -96,7 +96,29 @@ Check output and the result are persisted; inspect
 the returned verification ID with `verity proof show`. Source selection omits
 `.git`, `.verity`, `node_modules`, and `dist`. The snapshot identifies only
 the captured files, and checks run with the current user's OS permissions.
+The local `.verity/config.yaml` and `.verity/verification.yaml` are trusted
+control files: Git candidate verification rejects a candidate containing
+either path, and the approval digest binds the exact config bytes and parsed
+manifest.
 These commands do not automatically register or drive Codex work.
+
+For a Git repository, `verity verify index plan <workflow-id> <profile>`
+captures the complete staged tree, its current `HEAD` base, and the configured
+checks. Review the returned `git_index` candidate and approval digest, then run
+`verity verify index run <workflow-id> <profile> <approval-digest>`. Checks run
+in a disposable tree materialized from staged blobs, so unstaged edits and
+untracked files are excluded. The approval is rejected if the staged tree,
+base, workflow, manifest, profile, or checks differ. The result records the
+tree identity and base revision. Unmerged entries, submodules, and Git LFS
+pointers are rejected. Checks still run with the current user's OS permissions.
+
+To enable the opt-in local Git gate, run `verity hooks install`, inspect it
+with `verity hooks status`, and remove it with `verity hooks uninstall`.
+Existing hooks require `--chain` and run before Verity. The pre-commit hook
+blocks unless the configured `pre-commit` profile passes. Its post-commit hook
+records a proof binding only when `HEAD^{tree}` matches that passing index
+candidate. Git can bypass local hooks with `git commit --no-verify`; this is
+developer feedback, not repository enforcement. See `docs/hooks.md`.
 
 For an existing chat, `verity chat start feature` creates a workflow; use
 `verity chat begin <id> <task>` and `verity chat finish <id> <task>` to record

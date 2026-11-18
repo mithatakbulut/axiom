@@ -17,8 +17,11 @@ import (
 var ErrGate = errors.New("lifecycle release gate rejected progression")
 
 type Candidate struct {
-	SHA    string
-	Output string
+	SHA        string
+	Kind       verification.CandidateKind
+	Base       string
+	Repository string
+	Output     string
 }
 type Implementer interface {
 	Implement(context.Context, string, int) (Candidate, error)
@@ -115,7 +118,17 @@ func (s Service) Run(ctx context.Context, cfg Config, requirement string, manife
 		if _, err = hex.DecodeString(candidate.SHA); err != nil {
 			return out, verification.ErrInvalidCandidate
 		}
-		run, err := s.Verification.Verify(ctx, cfg.Repository, cfg.RunID, cfg.WorkflowID, cfg.TaskID, manifest, cfg.Profile, candidate.SHA, true)
+		if candidate.Kind == "" {
+			return out, verification.ErrInvalidCandidateKind
+		}
+		engine := s.Verification
+		engine.CandidateKind = candidate.Kind
+		engine.CandidateBase = candidate.Base
+		engine.CandidateRepository = candidate.Repository
+		if engine.CandidateRepository == "" {
+			engine.CandidateRepository = cfg.Repository
+		}
+		run, err := engine.Verify(ctx, cfg.Repository, cfg.RunID, cfg.WorkflowID, cfg.TaskID, manifest, cfg.Profile, candidate.SHA, true)
 		if err != nil {
 			return out, err
 		}
@@ -222,7 +235,7 @@ func (s Service) Run(ctx context.Context, cfg Config, requirement string, manife
 	for _, item := range evidence {
 		refs = append(refs, proof.ArtifactReference{EvidenceID: item.ID, Digest: item.ContentSHA256, Size: item.Size})
 	}
-	out.Bundle = proof.Bundle{SchemaVersion: 1, WorkflowID: cfg.WorkflowID, CandidateSHA: out.Candidate.SHA, Verification: out.Verification, Evidence: evidence, Artifacts: refs}
+	out.Bundle = proof.Bundle{SchemaVersion: proof.CurrentBundleSchemaVersion, WorkflowID: cfg.WorkflowID, CandidateKind: out.Verification.CandidateKind, Candidate: out.Verification.Candidate, CandidateSHA: out.Candidate.SHA, CandidateBase: out.Verification.CandidateBase, CandidateRepository: out.Verification.CandidateRepository, TrustLevel: out.Verification.TrustLevel, ManifestSHA256: out.Verification.ManifestSHA256, IsolationPolicy: out.Verification.IsolationPolicy, ContainerImage: out.Verification.ContainerImage, Verification: out.Verification, Evidence: evidence, Artifacts: refs}
 	if err = out.Bundle.Validate(); err != nil {
 		return out, err
 	}

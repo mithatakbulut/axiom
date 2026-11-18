@@ -7,9 +7,11 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"verity/internal/candidate"
 )
 
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 var ErrIncompatible = errors.New("Vigil MCP interface is incompatible")
 
@@ -27,30 +29,35 @@ const (
 // Link is the versioned bridge record. Verity's final two lifecycle states
 // are intentionally unrepresentable as Vigil outcomes.
 type Link struct {
-	SchemaVersion          int             `json:"schema_version"`
-	WorkflowID             string          `json:"workflow_id"`
-	TaskID                 string          `json:"task_id"`
-	AttemptID              string          `json:"attempt_id"`
-	CorrelationID          string          `json:"correlation_id"`
-	BaseSHA                string          `json:"base_sha"`
-	CandidateSHA           string          `json:"candidate_sha,omitempty"`
-	RuntimeID              string          `json:"runtime_id,omitempty"`
-	SessionID              string          `json:"session_id,omitempty"`
-	Status                 ExecutionStatus `json:"status"`
-	Signals                []string        `json:"signals,omitempty"`
-	EventRefs              []string        `json:"event_refs,omitempty"`
-	AdvisorAction          string          `json:"advisor_action,omitempty"`
-	BudgetWarnings         []string        `json:"budget_warnings,omitempty"`
-	ObservedModelRequests  int             `json:"observed_model_requests,omitempty"`
-	ObservedRuntimeSeconds int64           `json:"observed_runtime_seconds,omitempty"`
-	VigilVersion           string          `json:"vigil_version,omitempty"`
-	Summary                string          `json:"summary,omitempty"`
-	CapturedAt             time.Time       `json:"captured_at"`
+	SchemaVersion          int                `json:"schema_version"`
+	WorkflowID             string             `json:"workflow_id"`
+	TaskID                 string             `json:"task_id"`
+	AttemptID              string             `json:"attempt_id"`
+	CorrelationID          string             `json:"correlation_id"`
+	Candidate              candidate.Identity `json:"candidate,omitempty"`
+	BaseSHA                string             `json:"base_sha"`
+	CandidateSHA           string             `json:"candidate_sha,omitempty"`
+	RuntimeID              string             `json:"runtime_id,omitempty"`
+	SessionID              string             `json:"session_id,omitempty"`
+	TurnID                 string             `json:"turn_id,omitempty"`
+	Status                 ExecutionStatus    `json:"status"`
+	Signals                []string           `json:"signals,omitempty"`
+	EventRefs              []string           `json:"event_refs,omitempty"`
+	AdvisorAction          string             `json:"advisor_action,omitempty"`
+	BudgetWarnings         []string           `json:"budget_warnings,omitempty"`
+	ObservedModelRequests  int                `json:"observed_model_requests,omitempty"`
+	ObservedRuntimeSeconds int64              `json:"observed_runtime_seconds,omitempty"`
+	VigilVersion           string             `json:"vigil_version,omitempty"`
+	Summary                string             `json:"summary,omitempty"`
+	CapturedAt             time.Time          `json:"captured_at"`
 }
 
 func (l Link) Validate() error {
-	if l.SchemaVersion != SchemaVersion || l.WorkflowID == "" || l.TaskID == "" || l.AttemptID == "" || l.CorrelationID == "" || l.SessionID == "" || !validSHA(l.BaseSHA) || (l.CandidateSHA != "" && !validSHA(l.CandidateSHA)) || l.CapturedAt.IsZero() {
+	if (l.SchemaVersion != 1 && l.SchemaVersion != SchemaVersion) || l.WorkflowID == "" || l.TaskID == "" || l.AttemptID == "" || l.CorrelationID == "" || l.SessionID == "" || !validSHA(l.BaseSHA) || (l.CandidateSHA != "" && !validSHA(l.CandidateSHA)) || l.CapturedAt.IsZero() {
 		return errors.New("invalid Vigil bridge record")
+	}
+	if l.SchemaVersion == SchemaVersion && (l.Candidate.IsZero() || l.Candidate.Validate() != nil || l.Candidate.ID != l.CandidateSHA || (l.Candidate.Kind == candidate.GitIndex && l.Candidate.BaseRevision != l.BaseSHA)) {
+		return errors.New("version 2 Vigil link requires a matching typed candidate")
 	}
 	switch l.Status {
 	case ExecutionCompleted, ExecutionFailed, ExecutionBlocked, CandidateReady:

@@ -31,16 +31,17 @@ type AtomicEventHandler interface {
 }
 
 type Event struct {
-	DeliveryID    string `json:"delivery_id"`
-	Type          string `json:"type"`
-	Action        string `json:"action,omitempty"`
-	Repository    string `json:"repository"`
-	Number        int    `json:"number,omitempty"`
-	HeadSHA       string `json:"head_sha,omitempty"`
-	BaseSHA       string `json:"base_sha,omitempty"`
-	Ref           string `json:"ref,omitempty"`
-	WorkflowRunID int64  `json:"workflow_run_id,omitempty"`
-	Conclusion    string `json:"conclusion,omitempty"`
+	DeliveryID     string `json:"delivery_id"`
+	Type           string `json:"type"`
+	Action         string `json:"action,omitempty"`
+	Repository     string `json:"repository"`
+	InstallationID int64  `json:"installation_id,omitempty"`
+	Number         int    `json:"number,omitempty"`
+	HeadSHA        string `json:"head_sha,omitempty"`
+	BaseSHA        string `json:"base_sha,omitempty"`
+	Ref            string `json:"ref,omitempty"`
+	WorkflowRunID  int64  `json:"workflow_run_id,omitempty"`
+	Conclusion     string `json:"conclusion,omitempty"`
 }
 
 type Webhook struct {
@@ -128,6 +129,9 @@ func decodeEvent(kind, id string, body []byte) (Event, error) {
 			Repository struct {
 				FullName string `json:"full_name"`
 			} `json:"repository"`
+			Installation struct {
+				ID int64 `json:"id"`
+			} `json:"installation"`
 			PR struct {
 				Head struct {
 					SHA string `json:"sha"`
@@ -140,7 +144,7 @@ func decodeEvent(kind, id string, body []byte) (Event, error) {
 		if json.Unmarshal(body, &p) != nil || p.Number <= 0 || !fullSHA(p.PR.Head.SHA) || (p.PR.Base.SHA != "" && !fullSHA(p.PR.Base.SHA)) {
 			return e, errors.New("invalid pull request event")
 		}
-		e.Action, e.Number, e.Repository, e.HeadSHA, e.BaseSHA = p.Action, p.Number, p.Repository.FullName, p.PR.Head.SHA, p.PR.Base.SHA
+		e.Action, e.Number, e.Repository, e.HeadSHA, e.BaseSHA, e.InstallationID = p.Action, p.Number, p.Repository.FullName, p.PR.Head.SHA, p.PR.Base.SHA, p.Installation.ID
 		if e.Action != "opened" && e.Action != "reopened" && e.Action != "synchronize" && e.Action != "ready_for_review" && e.Action != "closed" {
 			return e, errors.New("unsupported pull request action")
 		}

@@ -1,5 +1,58 @@
 # Verity status
 
+## macOS-local product target
+
+The supported target for this roadmap is local use on macOS with trusted
+repositories. Checks run as the Verity user with a reduced environment and
+disposable snapshots, but are not OS sandboxed. Do not run untrusted PR code
+or enable unattended PR execution. Linux isolation and live GitHub hosting
+are optional deployments outside local acceptance.
+
+## 2026-11-18 — Execution integrity roadmap continuation
+
+Phase 6 now has an initial session-observation bridge: the Codex runtime
+captures its structured thread ID, and Verity queries Vigil's public MCP
+interface by that ID and the bounded attempt time window. Links are stored
+as candidate-bound observations and do not represent execution authority.
+No correlation secret is sent to the agent. Focused protocol and time-window
+tests pass. Real hook delivery has not been verified, so automatic
+correlation and Phase 6 acceptance remain open; see
+[decision 0014](decisions/0014-vigil-session-observation-correlation.md).
+
+Phase 4's durable plan orchestrator runs multi-step tasks in owned
+workspaces, captures candidates, verifies them, validates evidence, and
+recovers uncertain attempts without automatic retry. Local lifecycle tests
+cover intent-before-provider, crashes before invocation and after provider
+return but before result persistence, unknown outcomes, stale candidates,
+manifest changes after approval, missing evidence, and restart without unsafe
+re-execution. The CLI fixture drives a multi-step plan through verification
+and proof; proof export is byte-reproducible and refuses missing or corrupted
+stored artifacts. Live GitHub, Linux-container and real provider delivery
+remain separate release evidence in Phases 3, 5, 6 and 7.
+
+Phase 5 includes a self-hosted GitHub PR worker connecting signed webhook
+intake, durable queueing, exact-head fetch and checks, proof validation, and
+Check Run publication. GitHub App authentication, Enterprise URL support,
+installation scoping, retries, and actor-audited manual retrigger have local
+test coverage. Live GitHub delivery and hosted proof downloads have not been
+demonstrated. Phase 0 implementation acceptance is complete for local and
+self-hosted use. Phase 3 Linux container and malicious-host tests and Phase 7
+end-to-end release gates are incomplete. The execution integrity roadmap is
+not complete.
+
+Phase 7 now includes a generated disposable fixture repository with multi-commit
+history, staged/unstaged/untracked content, and opt-in pass/fail/slow/artifact,
+Playwright, and isolation-probe scenarios. The generator is covered by a Go
+test. Both modules' full race suites, vet/build checks, root `make check`, and
+the registered snapshot verifier passed for this continuation. These checks
+do not supply the missing real-runtime release evidence.
+
+Phase 0 has a shared, versioned typed candidate identity carried by new
+durable execution attempts, verification schema 2, proof bundle schema 2, and
+Verity-owned Vigil link schema 2. Version-1 verification and proof data remain
+readable, and old pre-versioned attempts are interpreted as schema 1. A hosted
+multi-tenant policy service is outside the current product boundary.
+
 ## 2026-11-16 — Existing Codex chat workflow
 
 The `chat` CLI can create and progress a feature, bugfix or documentation
@@ -54,6 +107,55 @@ OS permissions. A general dynamic workflow planner,
 recovery UI, and independently attributable Vigil correlation remain
 unfinished.
 
+## 2026-11-18 — Staged Git candidate verification
+
+`verity verify index plan|run` captures the complete Git index tree and records
+its `git_index` kind, Git common-directory identity, and separate `HEAD` base
+in the verification result. The approval digest binds workflow, tree, base,
+repository identity, manifest, profile, check plan, and the explicit
+`local_process_reduced_env` isolation policy. Each verification result and
+proof bundle also stores the SHA-256 digest of its parsed manifest. Checks
+materialize staged blobs in a fresh disposable directory per check; an index or
+base change between planning and execution invalidates the digest, and a
+change during verification is rejected by the candidate resolver. Coverage
+includes staged deletion, rename, addition, partial staging, untracked-file
+exclusion, nested paths, Unicode, linked worktrees, split indexes, conflict
+rejection, and mutation-during-check coverage. The original index and worktree
+remain unchanged by capture. Merge-conflicted indexes, submodules, and Git LFS pointers
+are explicitly unsupported. Manifests can name `pre-commit`, `pre-push`, and
+`full` profiles. The opt-in managed pre-commit gate checks this candidate and
+records proof; the post-commit hook binds only an identical passing tree. Hook
+installation is reversible and respects `core.hooksPath`. The runner is still
+a reduced-environment local process, not OS-level isolation.
+
+An opt-in Linux rootless Docker runner is available with the trusted manifest
+fields `trust_level: untrusted`, `isolation: rootless_container_no_network`,
+and a digest-pinned `container_image`. Untrusted manifests cannot select local
+process execution. It blocks when the host is not Linux, the process is root,
+the runtime is unavailable or not rootless/user-namespaced, or the image is
+not pinned. Direct container networking is disabled, no host home mount is
+used, and bounded CPU,
+memory, PID and temporary storage, and receives a fresh snapshot for each
+check through a bounded stdin archive transfer. If exact egress is configured,
+only the read-only relay executable and private broker socket are mounted.
+This adapter has not yet been run against a real Linux container in this
+environment. Each host archive and extracted snapshot is bounded to 512 MiB
+and 50,000 entries; a per-user Unix file lock serializes host snapshot/archive
+lifetimes across Verity processes sharing the same temporary directory.
+Exact network destination allowlists are supported for untrusted rootless
+container checks through a loopback relay and host CONNECT broker. Direct
+container networking remains disabled; DNS is resolved and checked by the
+broker before dialing a public IP. Real Linux runtime and malicious-container
+coverage are still outstanding, so the adapter is not yet sufficient for
+unattended untrusted PR execution.
+
+An authenticated Playwright scenario may explicitly receive a short-lived
+test credential from a trusted `VERITY_TEST_*` host variable. It is released
+only to that browser check, with an expiry deadline and a base-host-only
+egress rule. The test spec can read the value by design; Verity does not mint
+tokens or verify their server-side scopes. The source secret value is excluded
+from plan/proof records and redacted from captured output.
+
 Current milestone: Phase 10 complete. Verity persists execution intent and append-only attempt events, recovers interrupted attempts as UNKNOWN, and supports explicit reconciliation/abandonment. Phase 9 Vigil references remain optional and cannot establish execution completion.
 
 Post-plan hardening: configured candidate lookup failures now stop verification;
@@ -96,7 +198,7 @@ Phase 10 acceptance evidence on 2026-11-16: focused execution and SQLite tests c
 
 ## 2026-11-16 — Integration review
 
-The local [Vigil example](integrations/local-example.md) was run from clean temporary storage against freshly built binaries. It creates a Verity workflow, feeds a synthetic Vigil hook, reads the MCP snapshot, and attaches a caller-supplied candidate-bound link. It does not verify an actual candidate or prove the claimed session/attempt relationship. Corrected the bridge command's argument separator. Full module tests passed before this documentation-only change. Full event-to-execution orchestration, a user-facing end-to-end driver and real execution correlation remain unimplemented; the existing webhook and lifecycle tests exercise components rather than a deployed integration. HTTP API, distributed scheduling and production deployment remain outside the demonstrated local use case and need explicit acceptance criteria before additional infrastructure is justified.
+The local [Vigil example](integrations/local-example.md) was run from clean temporary storage against freshly built binaries. It creates a Verity workflow, feeds a synthetic Vigil hook, reads the MCP snapshot, and attaches a caller-supplied candidate-bound link. It does not verify an actual candidate or prove the claimed session/attempt relationship. Corrected the bridge command's argument separator. Full module tests passed before this documentation-only change. A self-hosted GitHub event-to-execution-to-proof worker and a user-facing local multi-step plan driver now exist; neither has been exercised as a deployed end-to-end integration. Live GitHub delivery, rootless Linux execution, and real Codex hook correlation remain unverified. HTTP API, distributed scheduling and production deployment remain outside the demonstrated local use case and need explicit acceptance criteria before additional infrastructure is justified.
 
 ## 2026-11-16 — Atomic GitHub pull-request trigger
 
@@ -119,16 +221,52 @@ schema and checks retained history, independent workflow attempts, and retry
 blocking. Back up the database before upgrading; older binaries do not support
 the new schema contract.
 
+## 2026-11-18 — GitHub PR queue and worker (initial slice)
+
+SQLite migration 8 adds a durable repository-scoped pull-request queue with
+bounded attempts, lease recovery, SHA supersession and close-event cancellation.
+`verity github serve` receives signed webhook requests with bounded HTTP timeouts;
+`verity github worker <owner/repo> once|loop` fetches an exact PR ref, loads
+operator-local untrusted verification policy, invokes the fail-closed rootless
+container runner, records check-output evidence, validates the proof bundle and
+artifact digests, checks the current PR head, then publishes a Check Run. The
+GitHub token and webhook secret are environment inputs. Public GitHub HTTPS
+is the default fetch endpoint; GitHub Enterprise API and Git base URLs can be
+configured separately. GitHub App installation discovery and scoped token
+refresh are implemented. Check Runs include the proof export command, while
+public hosted proof URLs remain unsupported. No live PR or Linux container test has been run, so this is not
+production-ready unattended automation.
+
+Focused GitHub, SQLite and CLI package tests pass. Root `make check` passes;
+the registered Verity snapshot verification is recorded in the implementation
+log for this change.
+
 The [local Vigil example](integrations/local-example.md) was rerun with freshly
 built binaries: the synthetic hook was visible through MCP and the supplied
 link was stored. It still does not demonstrate actual agent execution or
-candidate verification. GitHub-to-execution-to-proof orchestration remains
-unimplemented; this correction does not complete it. No live GitHub event or
-advisor was used.
+candidate verification. GitHub-to-execution-to-proof orchestration now exists
+as a self-hosted worker, but has not been exercised against a live GitHub event
+or rootless Linux runtime. No live GitHub event or advisor was used.
 
 Validation: focused SQLite tests, both modules' `go test ./...`,
 `go test -race ./...`, and `go vet ./...`, plus Verity `go build ./...`, passed
-with temporary Go caches. Git metadata is absent, so no Git diff was possible.
+with temporary Go caches. At that time the checkout did not expose Git metadata,
+so no diff was available.
+
+## 2026-11-18 — Authorized GitHub PR manual retrigger
+
+`verity github retrigger owner/repo <pull-number>` now authenticates the
+current GitHub user, requires repository write/maintain/admin permission,
+resolves the live PR head, and atomically records an actor-attributed manual
+worker job for that SHA. A pending or leased same-head job cannot be duplicated;
+delivery replay is idempotent. SQLite migration 9 preserves existing jobs and
+allows a later explicit run for a completed head. Migration 10 stores the actor
+in an append-only trigger table exposed by workflow listing. Focused GitHub, SQLite and
+CLI tests cover permission tiers, exact live SHA, job persistence, deduplication,
+legacy migration and pending-run rejection. Root `make check`, targeted race
+tests, and Verity `go vet ./...` pass. This command only queues work; the
+standard worker still performs verification and stale-head checks. Live GitHub
+and rootless Linux execution remain unverified.
 
 Codex observation prototype: a local tracker plugin records minimal hook
 metadata in the existing default project database and the Codex panel shows

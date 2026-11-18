@@ -134,3 +134,27 @@ func (s *Store) TaskVerifications(ctx context.Context, wf, task string) ([]verif
 	}
 	return runs, rows.Err()
 }
+
+// LatestPassingIndexVerification returns the most recently persisted passing
+// pre-commit result for exactly this repository and Git tree.
+func (s *Store) LatestPassingIndexVerification(ctx context.Context, repository, tree string) (verification.Run, bool, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT body FROM verification_runs WHERE candidate_sha=? ORDER BY rowid DESC", tree)
+	if err != nil {
+		return verification.Run{}, false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var body string
+		var run verification.Run
+		if err := rows.Scan(&body); err != nil {
+			return verification.Run{}, false, err
+		}
+		if err := json.Unmarshal([]byte(body), &run); err != nil {
+			return verification.Run{}, false, err
+		}
+		if run.CandidateKind == verification.CandidateGitIndex && run.CandidateRepository == repository && run.Profile == verification.PreCommit && run.State == verification.StatePass {
+			return run, true, nil
+		}
+	}
+	return verification.Run{}, false, rows.Err()
+}

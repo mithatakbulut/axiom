@@ -37,6 +37,9 @@ func run(args []string) error {
 	if opts.help || len(args) == 0 {
 		return showHelp(args)
 	}
+	if args[0] == "internal" {
+		return internalCommand(args[1:])
+	}
 	if err := validateArgs(args); err != nil {
 		return err
 	}
@@ -117,13 +120,26 @@ func run(args []string) error {
 		return planCommand(args, opts)
 	case "chat":
 		return chatCommand(args, opts)
+	case "hooks":
+		return hooksCommand(args, opts)
 	case "vigil":
 		return vigilCommand(args, opts)
 	case "github":
 		if args[1] == "workflows" {
 			return githubWorkflows(args, opts)
 		}
-		return githubReceive(args, opts)
+		switch args[1] {
+		case "retrigger":
+			return githubRetrigger(args, opts)
+		case "receive":
+			return githubReceive(args, opts)
+		case "serve":
+			return githubServe(args, opts)
+		case "worker":
+			return githubWorkerCommand(args, opts)
+		default:
+			return errors.New("usage: verity github receive|serve|worker|workflows|retrigger")
+		}
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}

@@ -27,6 +27,16 @@ func (s ContentSnapshotter) Snapshot(ctx context.Context, _ string, digest strin
 	if _, err := hex.DecodeString(digest); err != nil {
 		return "", nil, ErrInvalidCandidate
 	}
+	release, err := acquireSnapshotSlot(ctx)
+	if err != nil {
+		return "", nil, err
+	}
+	releaseOnReturn := true
+	defer func() {
+		if releaseOnReturn {
+			release()
+		}
+	}()
 	path := filepath.Join(s.Root, digest+".tar")
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -54,7 +64,15 @@ func (s ContentSnapshotter) Snapshot(ctx context.Context, _ string, digest strin
 	if hex.EncodeToString(sum[:]) != digest {
 		return "", nil, errors.New("source snapshot digest mismatch")
 	}
-	return unpackSnapshot(data)
+	dir, cleanup, err := unpackSnapshotLocked(data, defaultArchiveLimit, defaultArchiveLimit, defaultSnapshotEntryLimit)
+	if err != nil {
+		return "", nil, err
+	}
+	releaseOnReturn = false
+	return dir, func() {
+		cleanup()
+		release()
+	}, nil
 }
 
 // CreateContentSnapshot stores only explicitly selected project paths. It
@@ -116,7 +134,7 @@ func CreateContentSnapshot(ctx context.Context, root, destination string, select
 				return fmt.Errorf("snapshot path is not a regular file: %s", rel)
 			}
 			paths[rel] = true
-			if len(paths) > 100000 {
+			if len(paths) > defaultSnapshotEntryLimit {
 				return errors.New("too many snapshot files")
 			}
 			return nil

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"verity/internal/candidate"
 	"verity/internal/domain"
 	"verity/internal/execution"
 	codexruntime "verity/internal/execution/codex"
@@ -102,7 +103,8 @@ func workCommand(args []string, opts options) error {
 	if err != nil {
 		return err
 	}
-	request := execution.Request{ID: string(attemptID), WorkflowID: run.ID, TaskID: "implement", Workspace: root, Attempt: 1, BaseSHA: base, Timeout: 30 * time.Minute, Instruction: string(instruction) + "\n\nPreserve existing user changes. Do not initialize Git, create branches, commit, or push."}
+	baseCandidate := candidate.Identity{SchemaVersion: 1, Kind: candidate.ContentSource, ID: base, Repository: root, CapturedAt: time.Now().UTC(), Provenance: "verity-work:explicit-source-snapshot"}
+	request := execution.Request{ID: string(attemptID), WorkflowID: run.ID, TaskID: "implement", Workspace: root, BaseCandidate: baseCandidate, Attempt: 1, BaseSHA: base, Timeout: 30 * time.Minute, Instruction: string(instruction) + "\n\nPreserve existing user changes. Do not initialize Git, create branches, commit, or push."}
 	runtime := codexruntime.Runtime{Binary: binary, Model: cfg.CodexModel, SnapshotRoot: snapshotRoot, SourcePaths: args[3:]}
 	result, err := execution.RunDurable(ctx, runtime, request, db)
 	if err != nil || result.Outcome != execution.Succeeded {
@@ -125,7 +127,7 @@ func workCommand(args []string, opts options) error {
 	if err != nil {
 		return err
 	}
-	engine := verification.Engine{Runner: verification.CommandRunner{Snapshotter: verification.ContentSnapshotter{Root: snapshotRoot}}}
+	engine := verification.Engine{Runner: verification.CommandRunner{Snapshotter: verification.ContentSnapshotter{Root: snapshotRoot}}, CandidateKind: verification.CandidateContentSource, CandidateRepository: root}
 	checked, err := engine.Verify(ctx, root, string(verificationID), run.ID, "verify", manifest, verification.Standard, result.CandidateSHA, true)
 	if err != nil {
 		return errors.Join(err, update(run.Pause))

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"verity/internal/candidate"
 	"verity/internal/execution"
 	"verity/internal/process/control"
 	"verity/internal/proof"
@@ -131,6 +132,10 @@ func TestPlanDrivesThreeStepsAndHonorsApproval(t *testing.T) {
 	if _, err = invoke(t, "--config", cfg, "plan", "approve", created.ID, "gate", "reviewer", "reviewed"); err != nil {
 		t.Fatal(err)
 	}
+	changedManifest := "version: 1\ncommands:\n  check:\n    command: ['false']\n    required: true\n    timeout_seconds: 5\n    criteria: [works]\ncriteria:\n  - id: works\n    description: Works\n"
+	if err = os.WriteFile(filepath.Join(root, ".verity", "verification.yaml"), []byte(changedManifest), 0600); err != nil {
+		t.Fatal(err)
+	}
 	attempt, err := db.LatestExecutionAttempt(ctx, created.ID, "one")
 	if err != nil {
 		t.Fatal(err)
@@ -187,7 +192,7 @@ func TestPlanDoesNotRepeatUnknownOrFailedVerification(t *testing.T) {
 	for _, tc := range []struct {
 		name, command string
 		outcome       execution.Outcome
-	}{{"unknown", "true", execution.Unknown}, {"interrupted invocation", "true", execution.Unknown}, {"verification failure", "false", execution.Succeeded}} {
+	}{{"provider timeout with unknown outcome", "true", execution.Unknown}, {"crash after intent before provider invocation", "true", execution.Unknown}, {"verification failure", "false", execution.Succeeded}} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
 			if err := os.WriteFile(filepath.Join(root, "src"), []byte("data"), 0600); err != nil {
@@ -221,12 +226,13 @@ func TestPlanDoesNotRepeatUnknownOrFailedVerification(t *testing.T) {
 			if err = db.CreatePlan(ctx, d, run); err != nil {
 				t.Fatal(err)
 			}
-			if tc.name == "interrupted invocation" {
+			if tc.name == "crash after intent before provider invocation" {
 				base, err := verification.CreateContentSnapshot(ctx, root, filepath.Join(dir, "snapshots"), []string{"src"})
 				if err != nil {
 					t.Fatal(err)
 				}
-				req := execution.Request{ID: "interrupted", WorkflowID: "p", TaskID: "one", Workspace: root, Attempt: 1, BaseSHA: base, Timeout: time.Minute, Instruction: "work"}
+				baseCandidate := candidate.Identity{SchemaVersion: 1, Kind: candidate.ContentSource, ID: base, Repository: root, CapturedAt: time.Now().UTC(), Provenance: "verity-plan:test-base"}
+				req := execution.Request{ID: "interrupted", WorkflowID: "p", TaskID: "one", Workspace: root, Attempt: 1, BaseSHA: base, BaseCandidate: baseCandidate, Timeout: time.Minute, Instruction: "work"}
 				if err = db.CreateExecutionAttempt(ctx, execution.DurableAttempt{Request: req, Provider: "fake", CreatedAt: time.Now(), State: execution.AttemptRunning}); err != nil {
 					t.Fatal(err)
 				}
@@ -235,11 +241,17 @@ func TestPlanDoesNotRepeatUnknownOrFailedVerification(t *testing.T) {
 			if err = planDrive(ctx, root, dir, "", db, "p", runtime); err == nil {
 				t.Fatal("expected blocked execution")
 			}
+			if tc.name == "crash after intent before provider invocation" {
+				attempt, err := db.LatestExecutionAttempt(ctx, "p", "one")
+				if err != nil || attempt.State != execution.AttemptUnknown || attempt.Result != nil {
+					t.Fatalf("in-flight intent was not preserved as UNKNOWN without a fabricated result: %+v %v", attempt, err)
+				}
+			}
 			if err = planDrive(ctx, root, dir, "", db, "p", runtime); err == nil {
 				t.Fatal("expected blocked resume")
 			}
 			expectedCalls := 1
-			if tc.name == "interrupted invocation" {
+			if tc.name == "crash after intent before provider invocation" {
 				expectedCalls = 0
 			}
 			if runtime.calls != expectedCalls {
@@ -250,6 +262,111 @@ func TestPlanDoesNotRepeatUnknownOrFailedVerification(t *testing.T) {
 				t.Fatalf("premature completion %+v %v", got, err)
 			}
 		})
+	}
+}
+
+type stalePassPlanRuntime struct {
+	db         *sqlite.Store
+	repository string
+}
+
+func (r stalePassPlanRuntime) Capabilities(ctx context.Context) (execution.Capabilities, error) {
+	return execution.FakeRuntime{}.Capabilities(ctx)
+}
+
+func (r stalePassPlanRuntime) Execute(ctx context.Context, req execution.Request) (execution.Result, error) {
+	staleSHA := strings.Repeat("b", 64)
+	stale := verification.Run{
+		ID: "stale-pass", SchemaVersion: verification.CurrentRunSchemaVersion,
+		WorkflowID: req.WorkflowID, TaskID: req.TaskID,
+		Candidate: candidate.Identity{
+			SchemaVersion: 1, Kind: candidate.ContentSource, ID: staleSHA,
+			Repository: r.repository, CapturedAt: time.Now().UTC(), Provenance: "test:stale-candidate",
+		},
+		CandidateKind: verification.CandidateContentSource, CandidateSHA: staleSHA,
+		CandidateRepository: r.repository, IsolationPolicy: verification.IsolationLocalProcess,
+		TrustLevel: verification.TrustTrusted, Profile: verification.Standard,
+		State: verification.StatePass, StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC(),
+		Checks: []verification.CheckResult{{ID: "check", Name: "check", Required: true, Outcome: verification.Passed, EvidenceIDs: []string{"unbound-old-evidence"}}},
+	}
+	if err := r.db.SaveVerification(ctx, stale); err != nil {
+		return execution.Result{}, err
+	}
+	return execution.FakeRuntime{}.Execute(ctx, req)
+}
+
+func TestPlanDoesNotAcceptPassingVerificationForOlderCandidate(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "src"), []byte("source"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	dataDir := filepath.Join(root, ".verity")
+	if err := os.Mkdir(dataDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	manifest := "version: 1\ncommands:\n  check:\n    command: ['false']\n    required: true\n    timeout_seconds: 5\n    criteria: [works]\ncriteria:\n  - id: works\n    description: Works\n"
+	d := control.Definition{
+		SchemaVersion: 1, ID: "stale-plan", Name: "Stale candidate", Version: 1,
+		Goal: "Verify candidate identity", AcceptanceCriteria: []string{"Works"},
+		SourcePaths: []string{"src"}, VerificationManifest: manifest,
+		MaxTasks: 2, MaxAttempts: 1, MaxTransitions: 32,
+		Tasks: []control.Task{
+			{ID: "one", Title: "Implement", Description: "Make change", AcceptanceCriteria: []string{"Works"}, SourcePaths: []string{"src"}, TimeoutSeconds: 60, MaxAttempts: 1},
+			{ID: "_plan_verify", Title: "Finish verification", Description: "Verify final plan", AcceptanceCriteria: []string{"Works"}, SourcePaths: []string{"src"}, TimeoutSeconds: 60, MaxAttempts: 1, DependsOn: []string{"one"}},
+		},
+	}
+	ctx := context.Background()
+	db, err := sqlite.Open(ctx, filepath.Join(dataDir, "verity.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	run, err := control.NewRun(d.ID, d, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = run.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = run.ScheduleOne(); err != nil {
+		t.Fatal(err)
+	}
+	if err = run.BeginTask("one"); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.CreatePlan(ctx, d, run); err != nil {
+		t.Fatal(err)
+	}
+	runtime := stalePassPlanRuntime{db: db, repository: root}
+	if err = planDrive(ctx, root, dataDir, "", db, run.ID, runtime); err == nil {
+		t.Fatal("old passing verification hid the current candidate's failing check")
+	}
+	current, err := db.GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.State == control.Succeeded || current.Tasks[0].State == control.TaskCompleted {
+		t.Fatalf("stale verification completed the task: %+v", current)
+	}
+	attempt, err := db.LatestExecutionAttempt(ctx, run.ID, "one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifications, err := db.TaskVerifications(ctx, run.ID, "one")
+	if err != nil || len(verifications) != 2 {
+		t.Fatalf("verification records = %d, %v", len(verifications), err)
+	}
+	foundStale, foundCurrentFailure := false, false
+	for _, v := range verifications {
+		if v.CandidateSHA == strings.Repeat("b", 64) && v.State == verification.StatePass {
+			foundStale = true
+		}
+		if v.CandidateSHA == attempt.Result.CandidateSHA && v.State == verification.StateFail {
+			foundCurrentFailure = true
+		}
+	}
+	if !foundStale || !foundCurrentFailure {
+		t.Fatalf("stale/current decisions not preserved: %+v; candidate=%s", verifications, attempt.Result.CandidateSHA)
 	}
 }
 

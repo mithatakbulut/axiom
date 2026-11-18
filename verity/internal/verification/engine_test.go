@@ -1,6 +1,7 @@
 package verification
 
 import (
+	"archive/tar"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -43,6 +44,164 @@ profiles:
 	}
 	if _, err := ParseManifest([]byte("version: 1\ncommands:\n  test:\n    command: 'go test ./...; rm -rf /'\n    required: true\n    timeout_seconds: 2\n")); !errors.Is(err, ErrUnsafeCommand) {
 		t.Fatalf("shell command accepted: %v", err)
+	}
+}
+
+func TestRootlessContainerPolicyIsExplicitAndImageDigestPinned(t *testing.T) {
+	image := "registry.example/verity-checks@sha256:" + strings.Repeat("a", 64)
+	manifest, err := ParseManifest([]byte("version: 1\ntrust_level: untrusted\nisolation: rootless_container_no_network\ncontainer_image: " + image + "\ncommands:\n  test:\n    command: [go, test, ./...]\n    required: true\n    timeout_seconds: 10\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := manifest.Plan(testSHA(), Standard)
+	if err != nil || plan.TrustLevel != TrustUntrusted || plan.IsolationPolicy != IsolationRootlessContainer || plan.ContainerImage != image {
+		t.Fatalf("container plan: %#v %v", plan, err)
+	}
+	if _, err := ParseManifest([]byte("version: 1\nisolation: rootless_container_no_network\ncontainer_image: registry.example/checks:latest\ncommands:\n  test:\n    command: [true]\n    required: true\n    timeout_seconds: 1\n")); err == nil {
+		t.Fatal("mutable container image tag accepted")
+	}
+	if _, err := ParseManifest([]byte("version: 1\ntrust_level: untrusted\ncommands:\n  test:\n    command: [true]\n    required: true\n    timeout_seconds: 1\n")); err == nil {
+		t.Fatal("untrusted checks without container isolation accepted")
+	}
+}
+
+func TestNetworkAllowlistRequiresExactUntrustedDestinations(t *testing.T) {
+	base := "version: 1\ntrust_level: untrusted\nisolation: rootless_container_no_network\ncontainer_image: checks@sha256:" + strings.Repeat("a", 64) + "\nnetwork_allowlist:\n  - api.example.com:443\ncommands:\n  test:\n    command: [\"true\"]\n    required: true\n    timeout_seconds: 10\n"
+	manifest, err := ParseManifest([]byte(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := manifest.Plan(testSHA(), Standard)
+	if err != nil || len(plan.NetworkAllowlist) != 1 || plan.NetworkAllowlist[0] != "api.example.com:443" {
+		t.Fatalf("allowlist not bound to plan: %#v %v", plan, err)
+	}
+	for _, value := range []string{"127.0.0.1:443", "localhost:443", "*.example.com:443", "API.example.com:443", "api.example.com:0", "api.example.com:0443"} {
+		input := strings.Replace(base, "api.example.com:443", value, 1)
+		if _, err := ParseManifest([]byte(input)); err == nil {
+			t.Errorf("unsafe allowlist destination accepted: %q", value)
+		}
+	}
+	duplicate := strings.Replace(base, "  - api.example.com:443", "  - api.example.com:443\n  - api.example.com:443", 1)
+	if _, err := ParseManifest([]byte(duplicate)); err == nil {
+		t.Fatal("duplicate allowlist destination accepted")
+	}
+	trusted := strings.Replace(base, "trust_level: untrusted", "trust_level: trusted", 1)
+	if _, err := ParseManifest([]byte(trusted)); err == nil {
+		t.Fatal("trusted manifest accepted network allowlist")
+	}
+}
+
+func TestUntrustedVerificationCannotFallBackToLocalRunner(t *testing.T) {
+	manifest, err := ParseManifest([]byte("version: 1\ntrust_level: untrusted\nisolation: rootless_container_no_network\ncontainer_image: checks@sha256:" + strings.Repeat("b", 64) + "\ncommands:\n  test:\n    command: [echo, ok]\n    required: true\n    timeout_seconds: 1\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	contentSHA := hex.EncodeToString(make([]byte, 32))
+	run, err := (Engine{CandidateKind: CandidateContentSource, CandidateRepository: "test-repository"}).Verify(context.Background(), t.TempDir(), "run", "workflow", "", manifest, Standard, contentSHA, true)
+	if err != nil || run.State != StateBlocked || run.TrustLevel != TrustUntrusted || run.IsolationPolicy != IsolationRootlessContainer {
+		t.Fatalf("untrusted verification did not fail closed: %#v %v", run, err)
+	}
+	plan := Plan{CandidateSHA: testSHA(), TrustLevel: TrustUntrusted, IsolationPolicy: IsolationLocalProcess, Checks: []PlannedCheck{{ID: "test", Name: "test", Argv: []string{"true"}, Required: true, Timeout: time.Second}}}
+	checks, err := (CommandRunner{}).Execute(context.Background(), t.TempDir(), plan, true)
+	if err != nil || len(checks) != 1 || checks[0].Outcome != Blocked {
+		t.Fatalf("untrusted local runner must block: %#v %v", checks, err)
+	}
+}
+
+func TestContainerRunnerFailsClosedAndBuildsRestrictedRuntimeArgs(t *testing.T) {
+	plan := Plan{CandidateSHA: testSHA(), IsolationPolicy: IsolationRootlessContainer, ContainerImage: "image@sha256:" + strings.Repeat("0", 64), Checks: []PlannedCheck{{ID: "test", Name: "test", Argv: []string{"go", "test", "./..."}, Required: true, Timeout: time.Second}}}
+	results, err := (ContainerRunner{RuntimeBinary: filepath.Join(t.TempDir(), "missing-docker")}).Execute(context.Background(), t.TempDir(), plan, true)
+	if err != nil || len(results) != 1 || results[0].Outcome != Blocked {
+		t.Fatalf("missing runtime must block: %#v %v", results, err)
+	}
+	args := strings.Join(containerArgs(plan.ContainerImage, "go", []string{"test", "./..."}, "verity-check-test", ""), " ")
+	for _, required := range []string{"--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges:true", "--pids-limit=128", "--memory=1g", "--cpus=2", "--pull=never", "/workspace:rw,nosuid,nodev,size=512m", "/tmp:rw,nosuid,nodev,size=128m", "--entrypoint /bin/sh", "tar -x -C /workspace", "--name verity-check-test"} {
+		if !strings.Contains(args, required) {
+			t.Errorf("restricted container args missing %q: %s", required, args)
+		}
+	}
+	for _, forbidden := range []string{"--privileged", "/var/run/docker.sock", "--mount", os.Getenv("HOME") + ":"} {
+		if forbidden != ":" && strings.Contains(args, forbidden) {
+			t.Errorf("container args expose forbidden capability %q: %s", forbidden, args)
+		}
+	}
+}
+
+func TestContainerArgsKeepNetworkNoneAndScopeProxyMounts(t *testing.T) {
+	args := strings.Join(containerArgsWithEgress("checks@sha256:"+strings.Repeat("a", 64), "curl", []string{"https://api.example.com"}, "verity-check", "", "/usr/bin/verity", "/tmp/egress", "VERITY_TEST_TOKEN"), " ")
+	for _, required := range []string{"--network=none", "HTTP_PROXY=http://127.0.0.1:18080", "HTTPS_PROXY=http://127.0.0.1:18080", "/tmp/egress:/verity-egress:ro", "/usr/bin/verity:/verity-agent:ro", "internal egress-relay", "--env VERITY_TEST_TOKEN"} {
+		if !strings.Contains(args, required) {
+			t.Errorf("egress args missing %q: %s", required, args)
+		}
+	}
+	if strings.Contains(args, "--network=bridge") {
+		t.Fatal("allowlist enables unrestricted bridge networking")
+	}
+}
+
+type staticSnapshotter string
+
+func (s staticSnapshotter) Snapshot(context.Context, string, string) (string, func(), error) {
+	return string(s), func() {}, nil
+}
+
+func TestContainerRunnerUsesRootlessRuntimeAndRestrictedArguments(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(dir, "args.log")
+	runtimePath := filepath.Join(dir, "docker")
+	quotedLog := "'" + strings.ReplaceAll(log, "'", "'\\''") + "'"
+	script := "#!/bin/sh\nif [ \"$1\" = info ]; then echo '[\"name=rootless\"]'; exit 0; fi\nif [ \"$1\" = rm ]; then exit 0; fi\nprintf '%s\\n' \"$@\" > " + quotedLog + "\n"
+	if err := os.WriteFile(runtimePath, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	candidateDir := filepath.Join(dir, "candidate")
+	if err := os.Mkdir(candidateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	plan := Plan{CandidateSHA: testSHA(), IsolationPolicy: IsolationRootlessContainer, ContainerImage: "checks@sha256:" + strings.Repeat("a", 64), Checks: []PlannedCheck{{ID: "test", Name: "test", Argv: []string{"go", "test", "./..."}, Required: true, Timeout: time.Second}}}
+	runner := ContainerRunner{RuntimeBinary: runtimePath, Snapshotter: staticSnapshotter(candidateDir), hostOS: "linux", hostUID: 1000}
+	results, err := runner.Execute(context.Background(), dir, plan, true)
+	if err != nil || len(results) != 1 || results[0].Outcome != Passed {
+		t.Fatalf("rootless fake runtime result: %#v %v", results, err)
+	}
+	args, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"run", "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges:true", "--pids-limit=128", "--memory=1g", "--cpus=2", "--pull=never", "/workspace:rw,nosuid,nodev,size=512m", "--entrypoint", "checks@sha256:"} {
+		if !strings.Contains(string(args), required) {
+			t.Errorf("Docker invocation missing %q: %s", required, args)
+		}
+	}
+	if strings.Contains(string(args), "--privileged") || strings.Contains(string(args), "/var/run/docker.sock") {
+		t.Fatalf("Docker invocation contains forbidden access: %s", args)
+	}
+}
+
+func TestCandidateArchivePreservesSymlinkWithoutFollowingHostTarget(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside-secret")
+	if err := os.WriteFile(outside, []byte("host secret"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := candidateArchive(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = archive.Close(); _ = os.Remove(archive.Name()) }()
+	reader := tar.NewReader(archive)
+	header, err := reader.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if header.Name != "link" || header.Typeflag != tar.TypeSymlink || header.Linkname != outside {
+		t.Fatalf("symlink archive entry changed or was followed: %#v", header)
+	}
+	if _, err := reader.Next(); err == nil {
+		t.Fatal("outside symlink target was included in candidate archive")
 	}
 }
 
@@ -111,6 +270,62 @@ commands:
 	}
 }
 
+func TestRunnerDiscardsMutatedCandidateSnapshotBetweenChecks(t *testing.T) {
+	root, sha := candidateRepo(t)
+	m, err := ParseManifest([]byte(`version: 1
+commands:
+  a_mutate:
+    command: [sh, -c, "printf changed > marker"]
+    required: true
+    timeout_seconds: 2
+  b_verify:
+    command: [grep, -qx, original, marker]
+    required: true
+    timeout_seconds: 2
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := m.Plan(sha, Custom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, err := (CommandRunner{}).Execute(context.Background(), root, plan, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 || results[0].Outcome != Passed || results[1].Outcome != Passed {
+		t.Fatalf("checks shared a mutated candidate snapshot: %#v", results)
+	}
+	b, err := os.ReadFile(filepath.Join(root, "marker"))
+	if err != nil || string(b) != "original" {
+		t.Fatalf("repository changed: %q %v", b, err)
+	}
+}
+
+func TestEngineRejectsIndexMutationDuringVerification(t *testing.T) {
+	repo := initIndexRepo(t)
+	writeIndexFile(t, filepath.Join(repo, "tracked.txt"), "base\n")
+	gitCmd(t, repo, "add", "tracked.txt")
+	gitCmd(t, repo, "commit", "-m", "base")
+	candidate, err := CaptureIndex(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeIndexFile(t, filepath.Join(repo, "late.txt"), "index mutation\n")
+	manifest, err := ParseManifest([]byte("version: 1\ncommands:\n  mutate:\n    command: [git, -C, '" + repo + "', add, late.txt]\n    required: true\n    timeout_seconds: 5\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := Engine{
+		Runner:    CommandRunner{Snapshotter: IndexSnapshotter{}},
+		Candidate: IndexCurrent{Repository: repo, Candidate: candidate},
+	}
+	if _, err := engine.Verify(context.Background(), repo, "run", "workflow", "", manifest, Standard, candidate.Tree, true); !errors.Is(err, ErrCandidateChanged) {
+		t.Fatalf("verification should reject changed index: %v", err)
+	}
+}
+
 func TestRunnerTimeoutAndCancellationAreNonPassing(t *testing.T) {
 	root, sha := candidateRepo(t)
 	m, err := ParseManifest([]byte(`version: 1
@@ -131,6 +346,22 @@ commands:
 	}
 	if results[0].Outcome != TimedOut {
 		t.Fatalf("outcome %s", results[0].Outcome)
+	}
+}
+
+func TestRunnerFailsClosedForUnsupportedIsolationPolicy(t *testing.T) {
+	root, sha := candidateRepo(t)
+	m, err := ParseManifest([]byte("version: 1\ncommands:\n  test:\n    command: ['true']\n    required: true\n    timeout_seconds: 2\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := m.Plan(sha, Standard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.IsolationPolicy = "container"
+	if _, err := (CommandRunner{}).Execute(context.Background(), root, plan, true); !errors.Is(err, ErrUnsupportedIsolation) {
+		t.Fatalf("unsupported isolation policy should block: %v", err)
 	}
 }
 

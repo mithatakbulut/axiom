@@ -27,8 +27,11 @@ func TestRuntimeCapturesCompletedTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Outcome != execution.Succeeded || len(result.CandidateSHA) != 64 || !strings.Contains(result.Summary, "fixture-thread") {
+	if result.Outcome != execution.Succeeded || len(result.CandidateSHA) != 64 || result.Candidate.ID != result.CandidateSHA || result.Candidate.Kind != "content_snapshot" || !strings.Contains(result.Summary, "fixture-thread") || result.SessionID != "fixture-thread" {
 		t.Fatalf("unexpected result: %+v", result)
+	}
+	if err := result.Validate(); err != nil {
+		t.Fatalf("typed runtime result is invalid: %v", err)
 	}
 }
 

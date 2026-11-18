@@ -7,22 +7,28 @@
 - Local persistence: SQLite in WAL mode, one process/connection at a time.
 - GitHub: selected pull request, push, and Actions webhook normalization;
   exact-SHA Check Runs and PR summaries; paginated Actions run/artifact
-  metadata and bounded artifact download. An application-supplied event
-  handler is still required to start workflows and invalidate stale results.
+  metadata and bounded artifact download. A scoped signed PR receiver and
+  SQLite worker can verify exact PR heads when a trusted rootless-container
+  policy and pinned image are configured. GitHub App scoped token lifecycle,
+  Enterprise remote fetching, hosted proof URLs, push/Actions workflows and live-hosted
+  validation remain unsupported.
 - Preview: Netlify deployment adapter with source-SHA matching and HTTPS URL
   policy.
 - Browser verification: optional Playwright executable and project/browser
   dependencies must be installed in the check environment. Missing tools
   produce BLOCKED.
-- Runtime: fake and manual handoff adapters. No general-purpose coding agent
-  runtime is launched by this release.
+- Runtime: `work run` and persistent plans can launch a bounded Codex CLI
+  turn; fake and manual handoff adapters remain available for deterministic
+  workflows. Codex CLI availability and account/model access are required for
+  real provider execution.
 - Deployment: preview lifecycle contracts exist; production deployment is
   intentionally unavailable.
 
 Only local single-node use is in scope. Concurrent multi-user/team service,
 Windows/Linux provider validation, signed release archives, managed artifact
-retention, OS-level command sandboxing, and automated workflow trigger
-orchestration are not supported in v0.1.0.
+retention, and real Linux container validation are not yet supported in
+v0.1.0. The GitHub worker is an initial self-hosted integration, not a
+production deployment claim.
 
 ## Local environment observed
 
@@ -85,3 +91,25 @@ marks in-flight attempts UNKNOWN and never automatically repeats them. Operators
 must reconcile or abandon an unknown attempt before reusing its task attempt
 number. This is local single-process recovery; it does not provide distributed
 leases or guarantee that an external runtime stopped after Verity exited.
+
+## Typed candidate records
+
+New durable attempts use record schema version 2 and contain a versioned typed
+base candidate. Successful results, verification schema version 2, proof
+bundle schema version 2, and Verity-owned Vigil link schema version 2 carry a
+typed candidate identity. Existing pre-versioned durable attempts are read as
+schema version 1; schema-version-1 verification records and proof bundles
+remain readable. The JSON-body upgrade does not rewrite SQLite rows.
+
+Schema migration 8 adds the durable GitHub pull-request job queue. Migration 7
+remains the execution-attempt scope correction. Migration 9 preserves queued
+jobs while allowing an authorized manual trigger to create a new run for a
+previously verified PR head. Migration 10 adds an append-only audit record for
+the authenticated actor and manual trigger. Dashboard readers accept schema
+10. Older binaries do not understand queued GitHub work or its multiple-run-
+per-head history and must not open a database after migration 10 has been
+applied.
+GitHub Enterprise Git remotes are available through an explicit
+operator-supplied HTTPS base URL. GitHub App authentication discovers the
+installation for the worker's configured repository and refreshes scoped
+installation tokens; manual retrigger remains PAT-only.

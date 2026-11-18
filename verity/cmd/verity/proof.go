@@ -10,6 +10,7 @@ import (
 
 	"verity/internal/proof"
 	"verity/internal/store/sqlite"
+	"verity/internal/verification"
 )
 
 func proofCommand(args []string, opts options) error {
@@ -68,7 +69,22 @@ func proofCommand(args []string, opts options) error {
 	if err != nil {
 		return err
 	}
-	bundle := proof.Bundle{SchemaVersion: 1, WorkflowID: run.WorkflowID, CandidateSHA: run.CandidateSHA, Verification: run, Evidence: evidence, Artifacts: refs, Audit: audit, VigilLinks: vigilLinks}
+	bundleVersion := 1
+	if run.SchemaVersion >= verification.CurrentRunSchemaVersion {
+		bundleVersion = proof.CurrentBundleSchemaVersion
+	}
+	bundle := proof.Bundle{SchemaVersion: bundleVersion, WorkflowID: run.WorkflowID, CandidateKind: run.CandidateKind, Candidate: run.Candidate, CandidateSHA: run.CandidateSHA, CandidateBase: run.CandidateBase, CandidateRepository: run.CandidateRepository, TrustLevel: run.TrustLevel, ManifestSHA256: run.ManifestSHA256, IsolationPolicy: run.IsolationPolicy, ContainerImage: run.ContainerImage, Verification: run, Evidence: evidence, Artifacts: refs, Audit: audit, VigilLinks: vigilLinks}
+	configPath, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	artifactRoot := c.DataDir
+	if !filepath.IsAbs(artifactRoot) {
+		artifactRoot = filepath.Join(filepath.Dir(filepath.Dir(configPath)), artifactRoot)
+	}
+	if err := bundle.VerifyArtifacts(ctx, proof.LocalArtifactStore{Root: filepath.Join(artifactRoot, "artifacts")}); err != nil {
+		return fmt.Errorf("verify proof artifacts: %w", err)
+	}
 	data, err := bundle.Marshal()
 	if err != nil {
 		return err

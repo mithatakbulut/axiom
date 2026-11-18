@@ -26,9 +26,11 @@ timeout, cancellation, blocked and unknown. An unknown external side-effect
 outcome requires reconciliation before retry.
 
 Phase 3 Go contracts live in `internal/execution`. Each request has a
-positive attempt number, workspace, timeout and full base SHA. A successful
-result must include a full resulting candidate SHA; another outcome may
-include a candidate only when one is known. Runtime capabilities are queried before invocation,
+positive attempt number, workspace, timeout and full base SHA. New durable
+attempts use schema version 2 and require a versioned typed base candidate; a
+successful version-2 result must include a matching typed candidate identity.
+Pre-versioned attempt bodies are read as schema 1. Another outcome may include
+a candidate only when one is known. Runtime capabilities are queried before invocation,
 and `Run` applies the request timeout and parent cancellation. The original `Tracker` remains in-memory for non-durable callers. `RunDurable` commits a durable invocation intent before runtime execution, then persists the observed result; errors without an authoritative outcome are recorded UNKNOWN. `ManualRuntime` emits a handoff through its
 configured sink and returns `BLOCKED` with no candidate; a later human result
 must be recorded separately and is never treated as verification.
@@ -40,9 +42,10 @@ common-directory match and clean status; otherwise it refuses removal.
 
 ## Vigil bridge
 
-Bridge link schema version 1 records Verity workflow/task/attempt/correlation
-IDs, full base/candidate SHAs, an explicit Vigil session ID, execution-only
-status, normalized signals and compact budget/advisor facts. Links are
+Bridge link schema version 2 records Verity workflow/task/attempt/correlation
+IDs, a typed candidate, full base/candidate SHAs, an explicit Vigil session
+ID, execution-only status, normalized signals and compact budget/advisor facts.
+Version-1 caller-supplied links remain readable. Links are
 append-only in Verity's database and are included in proof export only when
 both workflow and candidate SHA match. The linked session ID is supplied by
 the runtime/operator because current Vigil public interfaces do not accept
@@ -58,8 +61,9 @@ correlation ID and reason; database triggers reject update and delete.
 
 ## Verification
 
-`verification.Run` contains a schema version, workflow/task IDs, a full
-candidate SHA/digest, profile, aggregate state, acceptance criteria, review
+New `verification.Run` records use schema version 2 and require a typed
+candidate identity alongside workflow/task IDs, a full candidate SHA/digest,
+profile, aggregate state, acceptance criteria, review
 record and check observations. Check outcomes are `PASS`, `FAIL`, `BLOCKED`,
 `SKIPPED` or `TIMED_OUT`; aggregate states are `PASS`, `FAIL`, `BLOCKED`,
 `NEEDS_HUMAN`, `STALE`, `PARTIAL` or `CANCELLED`. Validation rejects missing
@@ -67,11 +71,23 @@ identity, unsupported schema versions, mutable/short candidate references,
 duplicate checks and unknown outcomes. A missing, unavailable, skipped,
 timed-out or optional-only set of checks can never produce `PASS`.
 
+Version-1 verification records remain readable. Version-2 runs require an
+explicit candidate kind (`git_commit`, `git_index`, or `content_snapshot`),
+repository identity where applicable, base revision where applicable,
+isolation policy, and manifest SHA-256. The staged-index adapter identifies the candidate by
+the full Git tree object ID and records `HEAD` separately. Older version-1
+runs without these optional fields remain readable. Proof bundles copy and validate the
+candidate and manifest provenance from the verification record.
+
 The version 1 project manifest lives at `.verity/verification.yaml`. Check
 commands are displayed as argv in an immutable candidate-pinned plan and
-require explicit approval. String commands are split into argv words only;
-YAML sequences support arguments containing spaces. No shell interpolation
-is performed. Commands run in a disposable Git archive snapshot with bounded
+require explicit approval. The approval digest includes the exact local
+config bytes and parsed manifest; Git candidates containing the active config
+or `.verity/verification.yaml` are rejected. Each check receives a fresh
+disposable tree so a previous check cannot change the source seen by a later
+check. String commands are split into argv words only; YAML sequences support
+arguments containing spaces. No shell interpolation is performed. Commands run in a
+disposable Git archive snapshot with bounded
 timeouts/output and a reduced environment. Acceptance criteria map to check
 IDs; every criterion needs a passing required check. A result becomes stale
 when the candidate changes. If a configured current-candidate lookup fails,

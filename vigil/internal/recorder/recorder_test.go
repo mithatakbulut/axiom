@@ -82,6 +82,29 @@ func TestUnavailableStorage(t *testing.T) {
 	}
 }
 
+func TestSessionObservationsRespectAttemptTimeWindow(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "observation.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	start := time.Now().UTC().Truncate(time.Second)
+	for i, at := range []time.Time{start.Add(-time.Second), start.Add(time.Second), start.Add(3 * time.Second)} {
+		payload := fmt.Sprintf(`{"hook_event_name":"UserPromptSubmit","session_id":"session-c","turn_id":"turn-%d"}`, i)
+		e, err := Parse(strings.NewReader(payload), at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = s.Record(context.Background(), e, 30); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := s.SessionObservations(context.Background(), "session-c", start, start.Add(2*time.Second))
+	if err != nil || len(rows) != 1 || rows[0].SessionID != "session-c" || rows[0].TurnID != "turn-1" || rows[0].SchemaVersion != 1 {
+		t.Fatalf("observations=%+v err=%v", rows, err)
+	}
+}
+
 func TestSummaryCorrelatesAndPreservesUnknowns(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "db"))
 	if err != nil {

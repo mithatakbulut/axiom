@@ -25,6 +25,7 @@ func TestContentSnapshotPreservesSourceAndRejectsTampering(t *testing.T) {
 	}
 	defer cleanup()
 	content, err := os.ReadFile(filepath.Join(path, "source"))
+	cleanup()
 	if err != nil || string(content) != "first" {
 		t.Fatalf("snapshot content: %q, %v", content, err)
 	}

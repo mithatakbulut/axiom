@@ -72,8 +72,9 @@ Commands:
   work run                   Run a managed Codex job and verification
   plan                      Create and manage a persistent plan
   chat start|begin|finish    Track work performed in the current chat
+  hooks install|status|uninstall|run Manage local Git verification and commit binding
   vigil inspect|attach       Inspect or attach a Vigil session
-  github receive|workflows   Process deliveries or inspect PR associations
+  github receive|retrigger|workflows Process deliveries, retrigger PR work or inspect associations
 
 Options:
   --config PATH  Configuration file (default: .verity/config.yaml)
@@ -83,9 +84,12 @@ Options:
 Run 'verity COMMAND --help' for details.`,
 	"dashboard":         "Usage: verity dashboard summary --json [--config PATH]",
 	"dashboard summary": "Usage: verity dashboard summary --json [--config PATH]\n\nRead a minimal, read-only snapshot.",
-	"github":            "Usage: verity github receive <owner/repo> <delivery-id> <sha256-signature> < payload.json",
+	"github":            "Usage: verity github receive|serve|worker|workflows|retrigger [ARGS]",
 	"github workflows":  "Usage: verity github workflows <owner/repo>\n\nList exact-SHA pull request associations as JSON.",
+	"github retrigger":  "Usage: verity github retrigger <owner/repo> <pull-number>\n\nQueue an authorized manual verification for the live PR head. Requires a GitHub token with write permission.",
 	"github receive":    "Usage: verity github receive <owner/repo> <delivery-id> <sha256-signature> < payload.json\n\nSet VERITY_GITHUB_WEBHOOK_SECRET in the environment. Reads a raw pull_request body from stdin.",
+	"github serve":      "Usage: verity github serve <owner/repo> <listen-address>\n\nRun a bounded signed webhook receiver. Set VERITY_GITHUB_WEBHOOK_SECRET.",
+	"github worker":     "Usage: verity github worker <owner/repo> <once|loop>\n\nRun queued PR verification using trusted local policy. Set VERITY_GITHUB_TOKEN.",
 	"init":              "Usage: verity init [DIR]\n\nInitialize a project in DIR (default: current directory).",
 	"version":           "Usage: verity version\n\nPrint the version.",
 	"config":            "Usage: verity config validate [config-path]\n\nValidate configuration. Prefer --config PATH.",
@@ -100,10 +104,11 @@ Run 'verity COMMAND --help' for details.`,
 	"proof":             "Usage: verity proof show|export [ARGS]\n\nRun 'verity proof COMMAND --help' for details.",
 	"proof show":        "Usage: verity proof show <verification-run-id> [config-path]\n\nShow a verification run (use --json for full details).",
 	"proof export":      "Usage: verity proof export <verification-run-id> [output.json] [config-path]\n\nExport a proof bundle.",
-	"verify":            "Usage: verity verify plan|run <workflow-id> <candidate-sha> <profile> [approval-digest]",
+	"verify":            "Usage: verity verify plan|run|index [ARGS]",
 	"verify plan":       "Usage: verity verify plan <workflow-id> <candidate-sha> <profile>\n\nInspect the plan and its approval digest.",
 	"verify run":        "Usage: verity verify run <workflow-id> <candidate-sha> <profile> <approval-digest>\n\nRun the exact approved plan and persist evidence.",
 	"verify snapshot":   "Usage: verity verify snapshot <project-relative-path>...\n\nCapture the selected source files without Git.",
+	"verify index":      "Usage: verity verify index plan <workflow-id> <profile> | verify index run <workflow-id> <profile> <approval-digest>\n\nPlan or run checks against the exact staged Git tree.",
 	"work":              "Usage: verity work run <instruction-file> <source-path>...",
 	"work run":          "Usage: verity work run <instruction-file> <source-path>...\n\nRun a Codex turn, snapshot its output, and verify it.",
 	"plan":              "Usage: verity plan create|show|history|start|pause|resume|approve|reject|review|retry|abandon|reconcile [ARGS]",
@@ -124,6 +129,12 @@ Run 'verity COMMAND --help' for details.`,
 	"chat begin":        "Usage: verity chat begin <workflow-id> <task-id>",
 	"chat finish":       "Usage: verity chat finish <workflow-id> <task-id>",
 	"chat verify":       "Usage: verity chat verify <workflow-id> <source-path>...",
+	"hooks":             "Usage: verity hooks install|status|uninstall|run [ARGS]",
+	"hooks install":     "Usage: verity hooks install [--chain]\n\nInstall an opt-in pre-commit hook. Existing hooks require explicit --chain.",
+	"hooks status":      "Usage: verity hooks status",
+	"hooks uninstall":   "Usage: verity hooks uninstall",
+	"hooks run":         "Usage: verity hooks run\n\nRun the configured pre-commit profile against the staged Git tree.",
+	"hooks post-commit": "Usage: verity hooks post-commit\n\nBind a passing staged-tree proof to HEAD only when its tree matches.",
 	"vigil":             "Usage: verity vigil inspect|attach [ARGS]\n\nRun 'verity vigil COMMAND --help' for details. Use -- before options passed to Vigil.",
 	"vigil inspect":     "Usage: verity vigil inspect <vigil-binary> <session-id> [turn-id] [-- vigil-args...]",
 	"vigil attach":      "Usage: verity vigil attach <link.json> <vigil-binary> [-- vigil-args...]",
@@ -139,13 +150,14 @@ func showHelp(args []string) error {
 }
 func validateArgs(args []string) error {
 	key := args[0]
-	if len(args) > 1 && (key == "dashboard" || key == "workflow" || key == "task" || key == "proof" || key == "verify" || key == "work" || key == "plan" || key == "chat" || key == "vigil" || key == "config" || key == "github") {
+	if len(args) > 1 && (key == "dashboard" || key == "workflow" || key == "task" || key == "proof" || key == "verify" || key == "work" || key == "plan" || key == "chat" || key == "hooks" || key == "vigil" || key == "config" || key == "github") {
 		key += " " + args[1]
 	}
-	bounds := map[string][2]int{"dashboard summary": {2, 2}, "github receive": {5, 5}, "github workflows": {3, 3}, "version": {1, 1}, "init": {1, 2}, "doctor": {1, 2}, "config validate": {2, 3}, "workflow create": {5, 6}, "workflow list": {2, 3}, "workflow show": {3, 4}, "task list": {3, 4}, "proof show": {3, 4}, "proof export": {3, 5}, "vigil inspect": {4, -1}, "vigil attach": {4, -1}}
+	bounds := map[string][2]int{"dashboard summary": {2, 2}, "github receive": {5, 5}, "github workflows": {3, 3}, "github retrigger": {4, 4}, "github serve": {4, 4}, "github worker": {4, 4}, "version": {1, 1}, "init": {1, 2}, "doctor": {1, 2}, "config validate": {2, 3}, "workflow create": {5, 6}, "workflow list": {2, 3}, "workflow show": {3, 4}, "task list": {3, 4}, "proof show": {3, 4}, "proof export": {3, 5}, "vigil inspect": {4, -1}, "vigil attach": {4, -1}}
 	bounds["verify plan"] = [2]int{5, 5}
 	bounds["verify run"] = [2]int{6, 6}
 	bounds["verify snapshot"] = [2]int{3, -1}
+	bounds["verify index"] = [2]int{5, 6}
 	bounds["work run"] = [2]int{4, -1}
 	bounds["plan create"] = [2]int{3, 3}
 	bounds["plan show"] = [2]int{3, 3}
@@ -162,12 +174,31 @@ func validateArgs(args []string) error {
 	bounds["chat begin"] = [2]int{4, 4}
 	bounds["chat finish"] = [2]int{4, 4}
 	bounds["chat verify"] = [2]int{4, -1}
+	bounds["hooks install"] = [2]int{2, 3}
+	for _, name := range []string{"status", "uninstall", "run", "post-commit"} {
+		bounds["hooks "+name] = [2]int{2, 2}
+	}
 	b, ok := bounds[key]
 	if !ok {
 		return fmt.Errorf("unknown or incomplete command %q; run 'verity --help'", key)
 	}
 	if len(args) < b[0] || (b[1] >= 0 && len(args) > b[1]) {
 		return fmt.Errorf("%s; run 'verity %s --help'", strings.Split(help[key], "\n")[0], key)
+	}
+	if key == "verify index" && ((args[2] != "plan" && args[2] != "run") || (args[2] == "plan" && len(args) != 5) || (args[2] == "run" && len(args) != 6)) {
+		return errors.New("Usage: verity verify index plan <workflow-id> <profile> | verify index run <workflow-id> <profile> <approval-digest>")
+	}
+	if key == "hooks install" && len(args) == 3 && args[2] != "--chain" {
+		return errors.New("hooks install accepts only --chain")
+	}
+	if key == "github serve" && !normalizeGitHubRepo(args[2]) {
+		return errors.New("repository must be owner/repo")
+	}
+	if key == "github worker" && (!normalizeGitHubRepo(args[2]) || (args[3] != "once" && args[3] != "loop")) {
+		return errors.New("usage: verity github worker <owner/repo> <once|loop>")
+	}
+	if key == "github retrigger" && !normalizeGitHubRepo(args[2]) {
+		return errors.New("usage: verity github retrigger <owner/repo> <pull-number>")
 	}
 	if key == "workflow create" && args[2] != "feature" && args[2] != "bugfix" && args[2] != "documentation" {
 		return fmt.Errorf("unknown workflow template %q; choose feature, bugfix, or documentation", args[2])

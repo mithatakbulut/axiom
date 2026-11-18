@@ -130,9 +130,11 @@ until domain contracts stabilize. Future HTTP routes are versioned under
 
 Verification manifest commands are untrusted input and are exposed in a
 candidate-pinned plan for review before execution. The runner uses argv
-(never shell interpolation), an isolated temporary source snapshot, bounded
-time/output, cancellation and a restricted environment. It does not inherit
-secrets by default. Git operations use a separate adapter; destructive
+(never shell interpolation), a fresh disposable source snapshot for each
+check, bounded time/output, cancellation and a reduced environment. The plan
+binds the current `local_process_reduced_env` policy; this is not OS
+isolation. It does not inherit secrets by default. Git operations use a
+separate adapter; destructive
 cleanup must verify Verity ownership and a clean worktree.
 
 ## Task state flow

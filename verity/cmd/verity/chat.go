@@ -92,7 +92,7 @@ func chatCommand(args []string, opts options) error {
 		if err != nil {
 			return err
 		}
-		engine := verification.Engine{Runner: verification.CommandRunner{Snapshotter: verification.ContentSnapshotter{Root: snapshots}}}
+		engine := verification.Engine{Runner: verification.CommandRunner{Snapshotter: verification.ContentSnapshotter{Root: snapshots}}, CandidateKind: verification.CandidateContentSource, CandidateRepository: root}
 		checked, err := engine.Verify(ctx, root, string(id), run.ID, task, manifest, verification.Standard, digest, true)
 		if err != nil {
 			return err

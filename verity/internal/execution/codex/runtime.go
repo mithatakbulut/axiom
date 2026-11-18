@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"verity/internal/candidate"
 	"verity/internal/execution"
 	"verity/internal/verification"
 )
@@ -115,7 +116,7 @@ func (r Runtime) Execute(ctx context.Context, req execution.Request) (execution.
 		return execution.Result{}, errors.New("Codex did not return an unambiguous terminal event")
 	}
 	if failed {
-		return execution.Result{Outcome: execution.Failed, StartedAt: started, FinishedAt: time.Now().UTC(), Summary: "Codex turn failed" + failureSummary + "; thread " + thread}, nil
+		return execution.Result{Outcome: execution.Failed, SessionID: thread, StartedAt: started, FinishedAt: time.Now().UTC(), Summary: "Codex turn failed" + failureSummary + "; thread " + thread}, nil
 	}
 	if runErr != nil {
 		return execution.Result{}, fmt.Errorf("Codex process failed after its terminal event: %w", runErr)
@@ -131,5 +132,11 @@ func (r Runtime) Execute(ctx context.Context, req execution.Request) (execution.
 	if reportedSummary != "" {
 		summary += "; provider report: " + reportedSummary
 	}
-	return execution.Result{Outcome: execution.Succeeded, CandidateSHA: digest, StartedAt: started, FinishedAt: time.Now().UTC(), Summary: summary}, nil
+	finished := time.Now().UTC()
+	repository := req.BaseCandidate.Repository
+	if repository == "" {
+		repository = req.Workspace
+	}
+	identity := candidate.Identity{SchemaVersion: 1, Kind: candidate.ContentSource, ID: digest, Repository: repository, CapturedAt: finished, Provenance: "codex-cli:selected-source-snapshot"}
+	return execution.Result{Outcome: execution.Succeeded, CandidateSHA: digest, Candidate: identity, SessionID: thread, StartedAt: started, FinishedAt: finished, Summary: summary}, nil
 }

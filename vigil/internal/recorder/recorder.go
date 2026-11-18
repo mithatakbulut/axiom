@@ -313,6 +313,41 @@ func (s *Store) Record(ctx context.Context, e Event, retention int) error {
 	}
 	return tx.Commit()
 }
+
+type SessionObservation struct {
+	SchemaVersion int       `json:"schema_version"`
+	SessionID     string    `json:"session_id"`
+	TurnID        string    `json:"turn_id"`
+	ObservedAt    time.Time `json:"observed_at"`
+}
+
+// SessionObservations exposes only session/turn identifiers observed within
+// the bounded execution window; raw hook payloads remain private.
+func (s *Store) SessionObservations(ctx context.Context, session string, notBefore, notAfter time.Time) ([]SessionObservation, error) {
+	if session == "" || notBefore.IsZero() || notAfter.Before(notBefore) {
+		return nil, errors.New("invalid session observation query")
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT session_id,turn_id,MAX(timestamp) FROM events WHERE session_id=? AND timestamp>=? AND timestamp<=? AND turn_id<>'' GROUP BY session_id,turn_id ORDER BY MAX(timestamp) DESC LIMIT 10`, session, stamp(notBefore), stamp(notAfter))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []SessionObservation{}
+	for rows.Next() {
+		var item SessionObservation
+		var observed string
+		if err = rows.Scan(&item.SessionID, &item.TurnID, &observed); err != nil {
+			return nil, err
+		}
+		item.SchemaVersion = 1
+		item.ObservedAt, err = time.Parse("2006-01-02T15:04:05.000000000Z", observed)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
 func (s *Store) Check(ctx context.Context) (int, error) {
 	var result string
 	if err := s.db.QueryRowContext(ctx, "PRAGMA quick_check").Scan(&result); err != nil {

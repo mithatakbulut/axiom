@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	"verity/internal/candidate"
 	"verity/internal/domain"
 	vigilbridge "verity/internal/integrations/vigil"
 	"verity/internal/verification"
@@ -32,16 +33,27 @@ func (e AuditEvent) Validate() error {
 }
 
 type Bundle struct {
-	SchemaVersion int                 `json:"schema_version"`
-	WorkflowID    string              `json:"workflow_id"`
-	CandidateSHA  string              `json:"candidate_sha"`
-	Contract      json.RawMessage     `json:"contract,omitempty"`
-	Verification  verification.Run    `json:"verification"`
-	Evidence      []Evidence          `json:"evidence"`
-	Artifacts     []ArtifactReference `json:"artifacts"`
-	Audit         []AuditEvent        `json:"audit"`
-	VigilLinks    []vigilbridge.Link  `json:"vigil_links,omitempty"`
+	SchemaVersion       int                          `json:"schema_version"`
+	WorkflowID          string                       `json:"workflow_id"`
+	CandidateKind       verification.CandidateKind   `json:"candidate_kind,omitempty"`
+	Candidate           candidate.Identity           `json:"candidate,omitempty"`
+	CandidateSHA        string                       `json:"candidate_sha"`
+	CandidateBase       string                       `json:"candidate_base,omitempty"`
+	CandidateRepository string                       `json:"candidate_repository,omitempty"`
+	TrustLevel          string                       `json:"trust_level,omitempty"`
+	ManifestSHA256      string                       `json:"manifest_sha256,omitempty"`
+	IsolationPolicy     verification.IsolationPolicy `json:"isolation_policy,omitempty"`
+	ContainerImage      string                       `json:"container_image,omitempty"`
+	Contract            json.RawMessage              `json:"contract,omitempty"`
+	Verification        verification.Run             `json:"verification"`
+	Evidence            []Evidence                   `json:"evidence"`
+	Artifacts           []ArtifactReference          `json:"artifacts"`
+	Audit               []AuditEvent                 `json:"audit"`
+	VigilLinks          []vigilbridge.Link           `json:"vigil_links,omitempty"`
 }
+
+const CurrentBundleSchemaVersion = 2
+
 type ArtifactReference struct {
 	EvidenceID string `json:"evidence_id"`
 	Digest     string `json:"sha256"`
@@ -49,11 +61,27 @@ type ArtifactReference struct {
 }
 
 func (b Bundle) Validate() error {
-	if b.SchemaVersion != 1 || b.WorkflowID == "" || !validSHA(b.CandidateSHA, 40, 64) || b.Verification.WorkflowID != b.WorkflowID || b.Verification.CandidateSHA != b.CandidateSHA {
+	if (b.SchemaVersion != 1 && b.SchemaVersion != CurrentBundleSchemaVersion) || b.WorkflowID == "" || !validSHA(b.CandidateSHA, 40, 64) || b.Verification.WorkflowID != b.WorkflowID || b.Verification.CandidateSHA != b.CandidateSHA {
 		return errors.New("proof bundle identity mismatch")
+	}
+	if b.SchemaVersion == CurrentBundleSchemaVersion && (b.Verification.SchemaVersion != verification.CurrentRunSchemaVersion || b.Candidate.IsZero()) {
+		return errors.New("version 2 proof bundle requires a typed version 2 candidate record")
+	}
+	if b.SchemaVersion == 1 && b.Verification.SchemaVersion != 1 {
+		return errors.New("legacy proof bundle cannot embed a newer verification record")
 	}
 	if err := b.Verification.Validate(); err != nil {
 		return err
+	}
+	if !b.Candidate.IsZero() {
+		if err := b.Candidate.Validate(); err != nil || b.Verification.Candidate != b.Candidate {
+			return errors.New("proof bundle typed candidate identity mismatch")
+		}
+	} else if !b.Verification.Candidate.IsZero() {
+		return errors.New("proof bundle is missing typed candidate identity")
+	}
+	if b.CandidateKind != b.Verification.CandidateKind || b.CandidateBase != b.Verification.CandidateBase || b.CandidateRepository != b.Verification.CandidateRepository || b.TrustLevel != b.Verification.TrustLevel || b.ManifestSHA256 != b.Verification.ManifestSHA256 || b.IsolationPolicy != b.Verification.IsolationPolicy || b.ContainerImage != b.Verification.ContainerImage {
+		return errors.New("proof bundle candidate or manifest provenance mismatch")
 	}
 	seenAttempts := map[string]bool{}
 	for _, link := range b.VigilLinks {

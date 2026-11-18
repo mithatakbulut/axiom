@@ -4,12 +4,31 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"verity/internal/candidate"
 	"verity/internal/execution"
 )
+
+type resultWriteFailureStore struct{ *Store }
+
+func (s resultWriteFailureStore) RecordExecutionResult(context.Context, string, execution.Result) error {
+	return errors.New("simulated process loss before result persistence")
+}
+
+type resultAfterSideEffectRuntime struct{ calls int }
+
+func (r *resultAfterSideEffectRuntime) Capabilities(ctx context.Context) (execution.Capabilities, error) {
+	return execution.FakeRuntime{}.Capabilities(ctx)
+}
+
+func (r *resultAfterSideEffectRuntime) Execute(ctx context.Context, req execution.Request) (execution.Result, error) {
+	r.calls++ // Represents a provider-side effect that may have completed.
+	return execution.FakeRuntime{}.Execute(ctx, req)
+}
 
 func TestAttemptScopeAndV6Migration(t *testing.T) {
 	ctx := context.Background()
@@ -40,7 +59,7 @@ CREATE TABLE execution_attempt_events(id INTEGER PRIMARY KEY AUTOINCREMENT,attem
 	if got, err := s.ExecutionAttempt(ctx, "old"); err != nil || got.Request.WorkflowID != "legacy" || got.State != execution.AttemptRunning {
 		t.Fatalf("migration lost history: %+v %v", got, err)
 	}
-	req := execution.Request{ID: "one", WorkflowID: "wf1", TaskID: "implement", Workspace: "/w", Attempt: 1, BaseSHA: "0123456789abcdef0123456789abcdef01234567", Timeout: time.Minute}
+	req := execution.Request{ID: "one", WorkflowID: "wf1", TaskID: "implement", Workspace: "/w", Attempt: 1, BaseSHA: "0123456789abcdef0123456789abcdef01234567", BaseCandidate: testCommitCandidate("0123456789abcdef0123456789abcdef01234567"), Timeout: time.Minute}
 	if err = s.CreateExecutionAttempt(ctx, execution.DurableAttempt{Request: req, Provider: "fake"}); err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +77,7 @@ CREATE TABLE execution_attempt_events(id INTEGER PRIMARY KEY AUTOINCREMENT,attem
 	if _, err = s.RecoverRunningAttempts(ctx, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.CreateExecutionAttempt(ctx, execution.DurableAttempt{Request: execution.Request{ID: "three", WorkflowID: "wf1", TaskID: "implement", Workspace: "/w", Attempt: 2, BaseSHA: req.BaseSHA, Timeout: time.Minute}, Provider: "fake"}); err == nil {
+	if err = s.CreateExecutionAttempt(ctx, execution.DurableAttempt{Request: execution.Request{ID: "three", WorkflowID: "wf1", TaskID: "implement", Workspace: "/w", Attempt: 2, BaseSHA: req.BaseSHA, BaseCandidate: req.BaseCandidate, Timeout: time.Minute}, Provider: "fake"}); err == nil {
 		t.Fatal("unknown attempt allowed retry")
 	}
 }
@@ -71,7 +90,7 @@ func TestExecutionAttemptRecoveryAndReconciliation(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	req := execution.Request{ID: "exec-1", WorkflowID: "wf-1", TaskID: "task-1", Workspace: "/workspace", Attempt: 1, BaseSHA: "0123456789abcdef0123456789abcdef01234567", Timeout: time.Minute}
+	req := execution.Request{ID: "exec-1", WorkflowID: "wf-1", TaskID: "task-1", Workspace: "/workspace", Attempt: 1, BaseSHA: "0123456789abcdef0123456789abcdef01234567", BaseCandidate: testCommitCandidate("0123456789abcdef0123456789abcdef01234567"), Timeout: time.Minute}
 	if err = s.CreateExecutionAttempt(ctx, execution.DurableAttempt{Request: req, Provider: "manual", CreatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +120,8 @@ func TestExecutionAttemptRecoveryAndReconciliation(t *testing.T) {
 	if err = s.CreateExecutionAttempt(ctx, execution.DurableAttempt{Request: req, Provider: "manual", CreatedAt: now}); err == nil {
 		t.Fatal("reused task attempt number accepted")
 	}
-	recon := execution.Reconciliation{Outcome: execution.Succeeded, CandidateSHA: "1123456789abcdef0123456789abcdef01234567", Actor: "operator", Reason: "confirmed from runtime output", EvidenceRef: "ticket:123", At: now.Add(3 * time.Second)}
+	reconSHA := "1123456789abcdef0123456789abcdef01234567"
+	recon := execution.Reconciliation{Outcome: execution.Succeeded, CandidateSHA: reconSHA, Candidate: testCommitCandidate(reconSHA), Actor: "operator", Reason: "confirmed from runtime output", EvidenceRef: "ticket:123", At: now.Add(3 * time.Second)}
 	if err = s.ReconcileExecutionAttempt(ctx, req.ID, recon); err != nil {
 		t.Fatal(err)
 	}
@@ -130,16 +150,21 @@ func TestExecutionResultIdempotentAndConflictRejected(t *testing.T) {
 	}
 	defer s.Close()
 	now := time.Now().UTC()
-	req := execution.Request{ID: "exec", WorkflowID: "wf", TaskID: "task", Workspace: "/w", Attempt: 1, BaseSHA: "0123456789abcdef0123456789abcdef01234567", Timeout: time.Minute}
+	identity := candidate.Identity{SchemaVersion: 1, Kind: candidate.GitCommit, ID: "0123456789abcdef0123456789abcdef01234567", Repository: "file:///repo", CapturedAt: now, Provenance: "git:HEAD"}
+	req := execution.Request{ID: "exec", WorkflowID: "wf", TaskID: "task", Workspace: "/w", BaseCandidate: identity, Attempt: 1, BaseSHA: identity.ID, Timeout: time.Minute}
 	if err = s.CreateExecutionAttempt(ctx, execution.DurableAttempt{Request: req, Provider: "fake", CreatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	res := execution.Result{Outcome: execution.Succeeded, CandidateSHA: req.BaseSHA, StartedAt: now, FinishedAt: now.Add(time.Second)}
+	res := execution.Result{Outcome: execution.Succeeded, CandidateSHA: req.BaseSHA, Candidate: identity, StartedAt: now, FinishedAt: now.Add(time.Second)}
 	if err = s.RecordExecutionResult(ctx, req.ID, res); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.RecordExecutionResult(ctx, req.ID, res); err != nil {
 		t.Fatalf("identical result: %v", err)
+	}
+	stored, err := s.ExecutionAttempt(ctx, req.ID)
+	if err != nil || stored.Request.BaseCandidate != identity || stored.Result == nil || stored.Result.Candidate != identity {
+		t.Fatalf("typed candidate did not survive durable persistence: %+v err=%v", stored, err)
 	}
 	res.Summary = "conflict"
 	if err = s.RecordExecutionResult(ctx, req.ID, res); err == nil {
@@ -154,7 +179,7 @@ func TestRunDurablePersistsIntentBeforeResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	req := execution.Request{ID: "durable", WorkflowID: "wf", TaskID: "task", Workspace: "/workspace", Attempt: 1, BaseSHA: "0123456789abcdef0123456789abcdef01234567", Timeout: time.Second}
+	req := execution.Request{ID: "durable", WorkflowID: "wf", TaskID: "task", Workspace: "/workspace", Attempt: 1, BaseSHA: "0123456789abcdef0123456789abcdef01234567", BaseCandidate: testCommitCandidate("0123456789abcdef0123456789abcdef01234567"), Timeout: time.Second}
 	result, err := execution.RunDurable(ctx, execution.FakeRuntime{}, req, s)
 	if err != nil {
 		t.Fatal(err)
@@ -163,4 +188,55 @@ func TestRunDurablePersistsIntentBeforeResult(t *testing.T) {
 	if err != nil || got.State != execution.AttemptFinished || got.Result == nil || got.Result.CandidateSHA != result.CandidateSHA {
 		t.Fatalf("durable execution %+v %v", got, err)
 	}
+}
+
+func TestCrashAfterProviderReturnsBeforeResultPersistenceRecoversUnknown(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "attempts.db")
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	req := execution.Request{
+		ID: "crash-after-provider", WorkflowID: "wf-crash", TaskID: "task", Workspace: "/workspace",
+		Attempt: 1, BaseSHA: sha, BaseCandidate: testCommitCandidate(sha), Timeout: time.Second,
+	}
+	runtime := &resultAfterSideEffectRuntime{}
+	if _, err = execution.RunDurable(ctx, runtime, req, resultWriteFailureStore{Store: store}); err == nil {
+		t.Fatal("expected injected result persistence failure")
+	}
+	if runtime.calls != 1 {
+		t.Fatalf("provider calls = %d, want exactly one", runtime.calls)
+	}
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ids, err := store.RecoverRunningAttempts(ctx, time.Now().UTC())
+	if err != nil || len(ids) != 1 || ids[0] != req.ID {
+		t.Fatalf("recovered attempts = %v, err=%v", ids, err)
+	}
+	got, err := store.ExecutionAttempt(ctx, req.ID)
+	if err != nil || got.State != execution.AttemptUnknown || got.Result != nil {
+		t.Fatalf("post-crash attempt = %+v, err=%v; want UNKNOWN without a result", got, err)
+	}
+	if err = store.CreateExecutionAttempt(ctx, execution.DurableAttempt{
+		Request: execution.Request{ID: "unsafe-retry", WorkflowID: req.WorkflowID, TaskID: req.TaskID, Workspace: req.Workspace,
+			Attempt: 2, BaseSHA: sha, BaseCandidate: req.BaseCandidate, Timeout: req.Timeout},
+		Provider: "fake", CreatedAt: time.Now().UTC(), State: execution.AttemptRunning,
+	}); err == nil {
+		t.Fatal("uncertain provider execution allowed automatic retry")
+	}
+	if runtime.calls != 1 {
+		t.Fatalf("provider was reinvoked after recovery; calls=%d", runtime.calls)
+	}
+}
+
+func testCommitCandidate(id string) candidate.Identity {
+	return candidate.Identity{SchemaVersion: 1, Kind: candidate.GitCommit, ID: id, Repository: "file:///repo", CapturedAt: time.Now().UTC(), Provenance: "git:HEAD"}
 }

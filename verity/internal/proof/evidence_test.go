@@ -5,10 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"verity/internal/candidate"
 	vigilbridge "verity/internal/integrations/vigil"
 	"verity/internal/verification"
 )
@@ -26,6 +28,24 @@ func TestNewEvidenceBindsContentAndCandidate(t *testing.T) {
 	}
 	if e.CandidateSHA != candidate {
 		t.Fatalf("candidate = %q, want %q", e.CandidateSHA, candidate)
+	}
+}
+
+func TestVersionTwoBundleRequiresAndBindsTypedCandidate(t *testing.T) {
+	digest := hex.EncodeToString(make([]byte, 32))
+	identity := candidate.Identity{SchemaVersion: 1, Kind: candidate.ContentSource, ID: digest, Repository: "file:///workspace", CapturedAt: time.Now().UTC(), Provenance: "verification:test"}
+	run := verification.Run{ID: "run", SchemaVersion: verification.CurrentRunSchemaVersion, WorkflowID: "wf", Candidate: identity, CandidateKind: candidate.ContentSource, CandidateSHA: digest, CandidateRepository: identity.Repository, IsolationPolicy: verification.IsolationLocalProcess}
+	bundle := Bundle{SchemaVersion: CurrentBundleSchemaVersion, WorkflowID: "wf", Candidate: identity, CandidateKind: candidate.ContentSource, CandidateSHA: digest, CandidateRepository: identity.Repository, IsolationPolicy: verification.IsolationLocalProcess, Verification: run}
+	if err := bundle.Validate(); err != nil {
+		t.Fatalf("valid typed proof bundle rejected: %v", err)
+	}
+	bundle.Candidate.ID = strings.Repeat("1", 64)
+	if err := bundle.Validate(); err == nil {
+		t.Fatal("accepted proof bundle with a candidate identity differing from its verification")
+	}
+	bundle.Candidate = candidate.Identity{}
+	if err := bundle.Validate(); err == nil {
+		t.Fatal("accepted version 2 proof bundle without a typed candidate")
 	}
 }
 

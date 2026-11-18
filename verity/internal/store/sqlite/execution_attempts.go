@@ -19,6 +19,12 @@ func (s *Store) CreateExecutionAttempt(ctx context.Context, a execution.DurableA
 	if a.Provider == "" {
 		return execution.ErrInvalid
 	}
+	if a.SchemaVersion == 0 {
+		a.SchemaVersion = execution.CurrentAttemptSchemaVersion
+	}
+	if a.SchemaVersion != execution.CurrentAttemptSchemaVersion || a.Request.BaseCandidate.IsZero() {
+		return fmt.Errorf("%w: new durable attempts require schema %d and a typed base candidate", execution.ErrInvalid, execution.CurrentAttemptSchemaVersion)
+	}
 	if a.CreatedAt.IsZero() {
 		a.CreatedAt = time.Now().UTC()
 	}
@@ -63,6 +69,13 @@ func (s *Store) CreateExecutionAttempt(ctx context.Context, a execution.DurableA
 func (s *Store) RecordExecutionResult(ctx context.Context, id string, result execution.Result) error {
 	if err := result.Validate(); err != nil {
 		return err
+	}
+	attempt, err := s.ExecutionAttempt(ctx, id)
+	if err != nil {
+		return err
+	}
+	if attempt.SchemaVersion >= execution.CurrentAttemptSchemaVersion && result.Outcome == execution.Succeeded && result.Candidate.IsZero() {
+		return fmt.Errorf("%w: successful schema %d attempt requires a typed result candidate", execution.ErrInvalid, attempt.SchemaVersion)
 	}
 	b, _ := json.Marshal(result)
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -137,6 +150,13 @@ func (s *Store) ReconcileExecutionAttempt(ctx context.Context, id string, r exec
 	if err := r.Validate(); err != nil {
 		return err
 	}
+	attempt, err := s.ExecutionAttempt(ctx, id)
+	if err != nil {
+		return err
+	}
+	if attempt.SchemaVersion >= execution.CurrentAttemptSchemaVersion && r.Outcome == execution.Succeeded && r.Candidate.IsZero() {
+		return fmt.Errorf("%w: successful schema %d reconciliation requires a typed candidate", execution.ErrInvalid, attempt.SchemaVersion)
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -198,6 +218,9 @@ func (s *Store) ExecutionAttempt(ctx context.Context, id string) (execution.Dura
 	if err = json.Unmarshal([]byte(body), &a); err != nil {
 		return a, err
 	}
+	if a.SchemaVersion == 0 {
+		a.SchemaVersion = 1 // Pre-versioned durable attempt record.
+	}
 	state, payload, err := latestExecutionEvent(ctx, s.db, id)
 	if err != nil {
 		return a, err
@@ -212,7 +235,7 @@ func (s *Store) ExecutionAttempt(ctx context.Context, id string) (execution.Dura
 			if err = json.Unmarshal(payload, &rec); err != nil {
 				return a, err
 			}
-			result = execution.Result{Outcome: rec.Outcome, CandidateSHA: rec.CandidateSHA, Summary: rec.Reason, StartedAt: a.CreatedAt, FinishedAt: rec.At}
+			result = execution.Result{Outcome: rec.Outcome, CandidateSHA: rec.CandidateSHA, Candidate: rec.Candidate, Summary: rec.Reason, StartedAt: a.CreatedAt, FinishedAt: rec.At}
 		} else if err = json.Unmarshal(payload, &result); err != nil {
 			return a, err
 		}

@@ -51,7 +51,16 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return s.migrateExecutionScope(ctx)
+	if _, err = s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS github_pull_jobs(workflow_id TEXT PRIMARY KEY, repository TEXT NOT NULL, pull_number INTEGER NOT NULL, head_sha TEXT NOT NULL, delivery_id TEXT NOT NULL UNIQUE, payload TEXT NOT NULL, state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, started_at TEXT, next_attempt TEXT NOT NULL, last_error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(repository,pull_number,head_sha)); CREATE INDEX IF NOT EXISTS github_pull_jobs_ready ON github_pull_jobs(state,next_attempt,created_at); INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES(8,CURRENT_TIMESTAMP);`); err != nil {
+		return err
+	}
+	if err = s.migrateExecutionScope(ctx); err != nil {
+		return err
+	}
+	if err = s.migratePullJobHistory(ctx); err != nil {
+		return err
+	}
+	return s.migrateManualTriggerAudit(ctx)
 }
 func (s *Store) CreateProject(ctx context.Context, p domain.Project) error {
 	if err := p.Validate(); err != nil {

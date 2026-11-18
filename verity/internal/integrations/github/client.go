@@ -21,8 +21,21 @@ var ErrRateLimit = errors.New("GitHub rate limit exceeded")
 
 type Client struct {
 	BaseURL, Token string
-	HTTP           *http.Client
-	MaxRetries     int
+	TokenSource    interface {
+		AccessToken(context.Context) (string, error)
+	}
+	HTTP       *http.Client
+	MaxRetries int
+}
+
+func (c Client) AccessToken(ctx context.Context) (string, error) {
+	if c.TokenSource != nil {
+		return c.TokenSource.AccessToken(ctx)
+	}
+	if c.Token == "" {
+		return "", errors.New("GitHub token is required")
+	}
+	return c.Token, nil
 }
 
 func (c Client) request(ctx context.Context, method, path string, body any, out any) error {
@@ -30,15 +43,15 @@ func (c Client) request(ctx context.Context, method, path string, body any, out 
 	if base == "" {
 		base = "https://api.github.com"
 	}
-	if c.Token == "" {
-		return errors.New("GitHub token is required")
+	token, err := c.AccessToken(ctx)
+	if err != nil {
+		return err
 	}
 	hc := c.HTTP
 	if hc == nil {
 		hc = &http.Client{Timeout: 15 * time.Second}
 	}
 	var payload []byte
-	var err error
 	if body != nil {
 		payload, err = json.Marshal(body)
 		if err != nil {
@@ -57,7 +70,7 @@ func (c Client) request(ctx context.Context, method, path string, body any, out 
 		if err != nil {
 			return err
 		}
-		req.Header.Set("Authorization", "Bearer "+c.Token)
+		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("Accept", "application/vnd.github+json")
 		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 		req.Header.Set("Content-Type", "application/json")
@@ -239,6 +252,61 @@ func (c Client) PublishPRSummary(ctx context.Context, owner, repo string, s Comm
 		}
 	}
 	return c.request(ctx, http.MethodPost, base, map[string]string{"body": body}, nil)
+}
+
+// PullRequestHead returns GitHub's current head for the requested PR. It is
+// used immediately before publishing a final PR-facing result.
+func (c Client) PullRequestHead(ctx context.Context, owner, repo string, number int) (string, error) {
+	if owner == "" || repo == "" || number <= 0 {
+		return "", errors.New("repository and pull number are required")
+	}
+	var response struct {
+		Head struct {
+			SHA string `json:"sha"`
+		} `json:"head"`
+	}
+	path := "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) + "/pulls/" + strconv.Itoa(number)
+	if err := c.request(ctx, http.MethodGet, path, nil, &response); err != nil {
+		return "", err
+	}
+	if !fullSHA(response.Head.SHA) {
+		return "", errors.New("GitHub returned an invalid pull request head")
+	}
+	return response.Head.SHA, nil
+}
+
+// AuthorizePullRequestRetrigger resolves the authenticated actor and requires
+// write-capable repository permission before returning the live PR head.
+func (c Client) AuthorizePullRequestRetrigger(ctx context.Context, owner, repo string, number int) (string, string, error) {
+	if owner == "" || repo == "" || number <= 0 {
+		return "", "", errors.New("repository and pull number are required")
+	}
+	var user struct {
+		Login string `json:"login"`
+	}
+	if err := c.request(ctx, http.MethodGet, "/user", nil, &user); err != nil {
+		return "", "", err
+	}
+	if user.Login == "" {
+		return "", "", errors.New("GitHub returned an empty authenticated username")
+	}
+	var permission struct {
+		Permission string `json:"permission"`
+	}
+	path := "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) + "/collaborators/" + url.PathEscape(user.Login) + "/permission"
+	if err := c.request(ctx, http.MethodGet, path, nil, &permission); err != nil {
+		return "", "", err
+	}
+	switch permission.Permission {
+	case "write", "maintain", "admin":
+	default:
+		return "", "", fmt.Errorf("%w: user %q lacks write permission for %s/%s", ErrPermission, user.Login, owner, repo)
+	}
+	head, err := c.PullRequestHead(ctx, owner, repo, number)
+	if err != nil {
+		return "", "", err
+	}
+	return user.Login, head, nil
 }
 
 type ActionRun struct {

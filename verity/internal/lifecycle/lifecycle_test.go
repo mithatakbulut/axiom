@@ -93,7 +93,9 @@ func TestLifecycleBuildsCandidateBoundProofAndBlocksProduction(t *testing.T) {
 	artifacts := proof.LocalArtifactStore{Root: filepath.Join(t.TempDir(), "artifacts")}
 	records := &memoryEvidence{}
 	deploy := &deployer{}
-	s := Service{Implementer: implement(func(context.Context, string, int) (Candidate, error) { return Candidate{SHA: sha}, nil }), Verification: verification.Engine{Runner: verification.CommandRunner{}}, Reviewer: reviewer{}, Preview: deploy, Smoke: smoke{}, Approval: approval{allow: true}, Artifacts: artifacts, Evidence: records, Now: func() time.Time { return time.Unix(1, 0) }}
+	s := Service{Implementer: implement(func(context.Context, string, int) (Candidate, error) {
+		return Candidate{SHA: sha, Kind: verification.CandidateGitCommit}, nil
+	}), Verification: verification.Engine{Runner: verification.CommandRunner{}}, Reviewer: reviewer{}, Preview: deploy, Smoke: smoke{}, Approval: approval{allow: true}, Artifacts: artifacts, Evidence: records, Now: func() time.Time { return time.Unix(1, 0) }}
 	out, err := s.Run(ctx, Config{WorkflowID: "wf_demo", RunID: "verify_demo", Repository: repo, Profile: verification.Standard}, "add feature", manifest, true, true)
 	if err != nil {
 		t.Fatal(err)

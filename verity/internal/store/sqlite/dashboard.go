@@ -54,7 +54,7 @@ func Dashboard(ctx context.Context, path, projectID, projectName string) (Dashbo
 	if err = tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(version),0) FROM schema_migrations").Scan(&version); err != nil {
 		return out, fmt.Errorf("read database schema: %w", err)
 	}
-	if version < 1 || version > 7 {
+	if version < 1 || version > 10 {
 		return out, fmt.Errorf("unsupported database schema version %d", version)
 	}
 	rows, err := tx.QueryContext(ctx, "SELECT body FROM process_runs ORDER BY id")
