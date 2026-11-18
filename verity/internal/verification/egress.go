@@ -214,6 +214,8 @@ func brokerHandlerWith(allowed map[string]bool, lookup func(context.Context, str
 		go func() { _, _ = io.Copy(client, upstream); finished <- struct{}{} }()
 		<-finished
 		_ = client.Close()
+		_ = upstream.Close()
+		<-finished
 	})
 }
 

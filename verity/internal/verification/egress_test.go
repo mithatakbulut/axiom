@@ -147,12 +147,6 @@ func TestEgressBrokerTunnelsOnlyMatchingTLSHost(t *testing.T) {
 			} else if writeErr != nil {
 				t.Fatalf("write mismatched ClientHello: %v", writeErr)
 			}
-			_ = clientConn.Close()
-			select {
-			case <-done:
-			case <-time.After(5 * time.Second):
-				t.Fatal("broker handler did not finish")
-			}
 			if !tc.wantTunnel {
 				_ = upstreamConn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 				got := make([]byte, len(clientHello))
@@ -161,7 +155,13 @@ func TestEgressBrokerTunnelsOnlyMatchingTLSHost(t *testing.T) {
 					t.Fatalf("mismatched TLS SNI reached upstream: n=%d err=%v", n, readErr)
 				}
 			}
+			_ = clientConn.Close()
 			_ = upstreamConn.Close()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("broker handler did not finish")
+			}
 		})
 	}
 }
