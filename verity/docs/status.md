@@ -8,6 +8,32 @@ disposable snapshots, but are not OS sandboxed. Do not run untrusted PR code
 or enable unattended PR execution. Linux isolation and live GitHub hosting
 are optional deployments outside local acceptance.
 
+Exported proof bundles can be checked without the project database using
+`verity proof verify <bundle.json> <artifact-directory>`. This checks bundle
+consistency and artifact integrity, not authenticity or actual execution.
+
+## 2026-11-18 — Live acceptance audit
+
+Reviewed and preserved the preceding `proof verify` changes. The current
+desktop chat can reach Vigil MCP and observe its own tool hook metadata, but
+the connected catalog lacks `vigil_correlate_session`. This does not establish
+the managed provider-thread-to-hook handshake or candidate-bound persistence.
+GUI inspection was again denied by the computer-use safety layer; no bypass
+was attempted. Automatic real-hook correlation and desktop Stop acceptance
+remain open. See the [local acceptance record](../../docs/macos-local-acceptance.md).
+
+Added eight client rejection cases covering a mismatched session, observations
+before/after the attempt, unsupported schema, missing turn/time, malformed
+JSON, and an invalid record following a valid record. The focused tests and
+root `make check` passed using a temporary Go cache. No extra Codex process or
+advisor was started. Human approval remains pending in workflow
+`chat_50fee59b076391e9fd0dfd8ac28a00cf`.
+
+Its first source-snapshot verification returned FAIL because the isolated
+temporary HOME had no cached Go dependencies and `proxy.golang.org` DNS
+resolution failed; tracker passed. The local full suites passed separately.
+Network-enabled retry results are separate durable verification records.
+
 ## 2026-11-18 — Execution integrity roadmap continuation
 
 Phase 6 now has an initial session-observation bridge: the Codex runtime

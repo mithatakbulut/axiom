@@ -31,6 +31,7 @@ var volatileError = regexp.MustCompile(`0x[0-9a-fA-F]+|[0-9]+|/[^\s:]+/`)
 var transientError = regexp.MustCompile(`(?im)^(?:error: )?(?:temporary failure in name resolution|connection timed out|connection reset by peer|dial tcp [^\r\n]+: i/o timeout)\s*$`)
 
 var bashExit = regexp.MustCompile(`(?m)^Process exited with code ([0-9]{1,3})\r?$`)
+var goTestFailure = regexp.MustCompile(`(?m)^FAIL[ \t]+\S+[ \t]+[0-9]+(?:\.[0-9]+)?s\r?$`)
 
 var safeValue = regexp.MustCompile(`^[a-zA-Z0-9_.:/@ -]{1,256}$`)
 var secret = regexp.MustCompile(`(?i)(sk[-_][a-z0-9_-]{8,}|(?:token|password|secret|api[_-]?key|bearer|credential)[=:_/ -]+\S+|gh[pousr]_[a-z0-9]+|github_pat_[a-z0-9_]+|AKIA[A-Z0-9]{16})`)
@@ -151,7 +152,7 @@ func Parse(r io.Reader, now time.Time) (Event, error) {
 				data["is_error"] = failed
 			}
 		}
-		// The CLI's Bash result may be a text envelope. Inspect only its exit-code line.
+		// Shell results may contain an exit envelope or only raw stdout.
 		if tool := stringField(m, "tool_name"); tool == "Bash" || tool == "functions.exec_command" || tool == "exec_command" {
 
 			var responseText string
@@ -164,8 +165,16 @@ func Parse(r io.Reader, now time.Time) (Event, error) {
 					hash := sha256.Sum256([]byte(normalized))
 					data["failure_signature"] = "error-" + hex.EncodeToString(hash[:8])
 				}
+				// CLI 0.147.0 can omit exit metadata from Bash hooks. A known
+				// failure line plus Go's terminal package FAIL summary is still
+				// an observed test failure, not an inferred process exit code.
+				goFailure := data["failure_signature"] != nil && goTestFailure.MatchString(responseText)
+				if goFailure {
+					data["error_summary"] = "Go test output reported failure"
+					data["error_fingerprint"] = data["failure_signature"]
+				}
 				matches := testCounts.FindAllStringSubmatch(responseText, 2)
-				if len(matches) == 1 {
+				if len(matches) == 1 && !goFailure {
 					match := matches[0]
 					passed, e1 := strconv.Atoi(match[1])
 					failed, e2 := strconv.Atoi(match[2])

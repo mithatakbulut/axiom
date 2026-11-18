@@ -14,6 +14,21 @@ import (
 )
 
 func proofCommand(args []string, opts options) error {
+	if len(args) == 4 && args[1] == "verify" {
+		data, err := os.ReadFile(args[2])
+		if err != nil {
+			return err
+		}
+		var bundle proof.Bundle
+		if err := json.Unmarshal(data, &bundle); err != nil {
+			return fmt.Errorf("decode proof bundle: %w", err)
+		}
+		if err := bundle.VerifyArtifacts(context.Background(), proof.LocalArtifactStore{Root: args[3]}); err != nil {
+			return fmt.Errorf("verify proof bundle: %w", err)
+		}
+		fmt.Printf("Proof integrity verified: workflow %s, candidate %s, state %s\n", bundle.WorkflowID, bundle.CandidateSHA, bundle.Verification.State)
+		return nil
+	}
 	if len(args) < 3 {
 		return errors.New("usage: verity proof show|export <verification-run-id> [output.json] [config-path]")
 	}

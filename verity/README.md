@@ -83,6 +83,13 @@ Use `verity --help` or, for example, `verity workflow create --help` for command
 
 A disposable [Vigil integration example](docs/integrations/local-example.md) demonstrates the explicit MCP link and its limits.
 
+To independently check an exported bundle without the project database, copy
+the content-addressed artifact directory with it and run
+`verity proof verify proof.json /path/to/artifacts`. For a default project the
+directory is `.verity/artifacts`. This validates bundle consistency and artifact
+digests; it does not authenticate the producer, prove that checks were actually
+executed, or turn a non-PASS result into a PASS. Bundles are not signed.
+
 To turn a forwarded signed GitHub pull-request delivery into a local workflow record, see [GitHub delivery](docs/integrations/github-delivery.md).
 
 ## Local source verification without Git

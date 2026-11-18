@@ -4,7 +4,7 @@
 > verification, proof, and observation components to a reliably
 > integrated engineering control plane.
 >
-> **Status:** Complete for macOS-local trusted-repository use. Untrusted PR execution, Linux isolation, live GitHub hosting, and release automation are out of scope for this target.\
+> **Status:** Core lifecycle implemented and locally verified for macOS trusted-repository use. Live Vigil detection/advisor evaluation, desktop GUI/Stop acceptance, and managed real-hook correlation remain open; see [local acceptance](macos-local-acceptance.md). Untrusted PR execution, Linux isolation, live GitHub hosting, and release automation are out of scope for this target.\
 > **Repository baseline reviewed:** `mithatakbulut/axiom`, `main`, 18
 > November 2026\
 > **Primary owners:** Verity (workflow, execution control, verification,
@@ -1242,7 +1242,9 @@ filtering. This does not yet prove actual Codex hook delivery or that the
 provider thread ID and Vigil hook session ID are the same identifier, so
 Phase 6's protocol and failure handling are implemented and locally tested.
 Real Codex hook delivery is optional runtime evidence, not a macOS-local
-acceptance requirement.
+core-lifecycle acceptance requirement. Phase 6's own real-hook criterion above
+remains open; the overall local release must not be described as fully accepted
+on synthetic protocol tests alone. See [local acceptance](macos-local-acceptance.md).
 
 Phase 7 now also covers the failure path where Vigil cannot be started and the
 path where its MCP tool returns an incomplete observation. Both cases create

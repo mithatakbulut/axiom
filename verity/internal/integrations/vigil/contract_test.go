@@ -66,6 +66,45 @@ printf '%s\n' '` + response + `'
 	}
 }
 
+func TestMCPClientRejectsInvalidSessionObservations(t *testing.T) {
+	start := time.Date(2026, 11, 18, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name, observations string
+	}{
+		{"different session", `[{"schema_version":1,"session_id":"other","turn_id":"turn-1","observed_at":"2026-11-18T00:00:30Z"}]`},
+		{"before attempt", `[{"schema_version":1,"session_id":"session-1","turn_id":"turn-1","observed_at":"2026-11-17T23:59:59Z"}]`},
+		{"after attempt", `[{"schema_version":1,"session_id":"session-1","turn_id":"turn-1","observed_at":"2026-11-18T00:01:01Z"}]`},
+		{"unsupported schema", `[{"schema_version":2,"session_id":"session-1","turn_id":"turn-1","observed_at":"2026-11-18T00:00:30Z"}]`},
+		{"missing turn", `[{"schema_version":1,"session_id":"session-1","observed_at":"2026-11-18T00:00:30Z"}]`},
+		{"missing timestamp", `[{"schema_version":1,"session_id":"session-1","turn_id":"turn-1"}]`},
+		{"malformed observations", `{`},
+		{"valid record followed by invalid record", `[{"schema_version":1,"session_id":"session-1","turn_id":"turn-1","observed_at":"2026-11-18T00:00:30Z"},{"schema_version":1,"session_id":"other","turn_id":"turn-2","observed_at":"2026-11-18T00:00:30Z"}]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			response, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 3, "result": map[string]any{"content": []any{map[string]string{"type": "text", "text": tc.observations}}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			bin := filepath.Join(t.TempDir(), "mcp-fixture")
+			script := `#!/bin/sh
+read a
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"vigil","version":"0.1.0"}}}'
+read b
+printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"vigil_correlate_session"}]}}'
+read c
+printf '%s\n' '` + string(response) + `'
+`
+			if err := os.WriteFile(bin, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			got, err := (MCPClient{Command: bin}).CorrelateSession(context.Background(), "session-1", start, start.Add(time.Minute))
+			if err == nil || len(got) != 0 {
+				t.Fatalf("invalid observation returned correlation=%+v err=%v", got, err)
+			}
+		})
+	}
+}
+
 func TestNormalizeProgress(t *testing.T) {
 	got := normalizeProgress(json.RawMessage(`{"decision":"escalate_candidate","signals":["repeat_failure","repeat_failure"]}`))
 	if len(got) != 2 || got[0] != "repeat_failure" || got[1] != "progress_escalation_candidate" {

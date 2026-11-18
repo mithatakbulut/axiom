@@ -67,7 +67,7 @@ Commands:
   dashboard summary          Read a minimal dashboard snapshot
   workflow create|list|show  Create or inspect workflow runs
   task list                  List tasks in a run
-  proof show|export          Inspect or export verification evidence
+  proof show|export|verify   Inspect, export, or check verification evidence
   verify plan|run            Plan or run candidate verification
   work run                   Run a managed Codex job and verification
   plan                      Create and manage a persistent plan
@@ -101,9 +101,10 @@ Run 'verity COMMAND --help' for details.`,
 	"workflow show":     "Usage: verity workflow show <run-id> [config-path]\n\nShow a workflow run (use --json for full details).",
 	"task":              "Usage: verity task list <run-id> [config-path] [--json]",
 	"task list":         "Usage: verity task list <run-id> [config-path] [--json]\n\nList tasks in a workflow run.",
-	"proof":             "Usage: verity proof show|export [ARGS]\n\nRun 'verity proof COMMAND --help' for details.",
+	"proof":             "Usage: verity proof show|export|verify [ARGS]\n\nRun 'verity proof COMMAND --help' for details.",
 	"proof show":        "Usage: verity proof show <verification-run-id> [config-path]\n\nShow a verification run (use --json for full details).",
 	"proof export":      "Usage: verity proof export <verification-run-id> [output.json] [config-path]\n\nExport a proof bundle.",
+	"proof verify":      "Usage: verity proof verify <bundle.json> <artifact-directory>\n\nValidate a bundle and its content-addressed artifacts without a project database.",
 	"verify":            "Usage: verity verify plan|run|index [ARGS]",
 	"verify plan":       "Usage: verity verify plan <workflow-id> <candidate-sha> <profile>\n\nInspect the plan and its approval digest.",
 	"verify run":        "Usage: verity verify run <workflow-id> <candidate-sha> <profile> <approval-digest>\n\nRun the exact approved plan and persist evidence.",
@@ -154,6 +155,7 @@ func validateArgs(args []string) error {
 		key += " " + args[1]
 	}
 	bounds := map[string][2]int{"dashboard summary": {2, 2}, "github receive": {5, 5}, "github workflows": {3, 3}, "github retrigger": {4, 4}, "github serve": {4, 4}, "github worker": {4, 4}, "version": {1, 1}, "init": {1, 2}, "doctor": {1, 2}, "config validate": {2, 3}, "workflow create": {5, 6}, "workflow list": {2, 3}, "workflow show": {3, 4}, "task list": {3, 4}, "proof show": {3, 4}, "proof export": {3, 5}, "vigil inspect": {4, -1}, "vigil attach": {4, -1}}
+	bounds["proof verify"] = [2]int{4, 4}
 	bounds["verify plan"] = [2]int{5, 5}
 	bounds["verify run"] = [2]int{6, 6}
 	bounds["verify snapshot"] = [2]int{3, -1}

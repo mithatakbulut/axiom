@@ -128,6 +128,26 @@ func TestVerifyIndexUsesApprovedStagedCandidate(t *testing.T) {
 	if len(bundle.Artifacts) == 0 {
 		t.Fatal("exported proof has no artifacts")
 	}
+	artifactDir := filepath.Join(root, ".verity", "artifacts")
+	if _, err := invoke(t, "proof", "verify", proofPath, artifactDir); err != nil {
+		t.Fatalf("independent proof verification failed: %v", err)
+	}
+	var tampered map[string]any
+	if err := json.Unmarshal(proofBytes, &tampered); err != nil {
+		t.Fatal(err)
+	}
+	tampered["candidate_sha"] = strings.Repeat("a", 40)
+	tamperedBytes, err := json.Marshal(tampered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tamperedPath := filepath.Join(root, "tampered-proof.json")
+	if err := os.WriteFile(tamperedPath, tamperedBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := invoke(t, "proof", "verify", tamperedPath, artifactDir); err == nil {
+		t.Fatal("independent proof verification accepted a mismatched candidate")
+	}
 	artifactPath := filepath.Join(root, ".verity", "artifacts", bundle.Artifacts[0].Digest[:2], bundle.Artifacts[0].Digest[2:])
 	if err := os.WriteFile(artifactPath, []byte("corrupt artifact"), 0600); err != nil {
 		t.Fatal(err)
@@ -135,8 +155,14 @@ func TestVerifyIndexUsesApprovedStagedCandidate(t *testing.T) {
 	if _, err := invoke(t, "--config", cfg, "proof", "export", result.ID, filepath.Join(root, "corrupt-proof.json")); err == nil || !strings.Contains(err.Error(), "verify proof artifacts") {
 		t.Fatalf("proof export accepted a corrupted artifact: %v", err)
 	}
+	if _, err := invoke(t, "proof", "verify", proofPath, artifactDir); err == nil {
+		t.Fatal("independent proof verification accepted a corrupted artifact")
+	}
 	if err := os.Remove(artifactPath); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := invoke(t, "proof", "verify", proofPath, artifactDir); err == nil {
+		t.Fatal("independent proof verification accepted a missing artifact")
 	}
 	missingProofPath := filepath.Join(root, "missing-proof.json")
 	if _, err := invoke(t, "--config", cfg, "proof", "export", result.ID, missingProofPath); err == nil || !strings.Contains(err.Error(), "verify proof artifacts") {

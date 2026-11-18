@@ -8,6 +8,16 @@ Only selected identifiers, tool name, agent type, documented enumerations, boole
 
 For structured tool results, numeric `exit_code` and boolean `isError` are observed. For Bash and recognized shell tool text results, Vigil extracts the exit envelope, explicit test counts, a few transient network signatures and hashes selected normalized failure lines. No original output is stored. Unrecognized failures receive coarse fingerprints. A model event may supply numeric `token_usage` fields; absent or unrecognized usage remains unknown. Tool duration is computed in summaries only when both endpoints share a session, turn and tool-use ID and are ordered. Hook timing includes hook delivery overhead. No model-request duration is invented without a reliable correlation ID. Advisor runs have a separate durable reservation and outcome.
 
+CLI 0.147.0 can deliver raw Bash stdout without an exit envelope. When a
+recognized failure line and Go's terminal `FAIL <package> <duration>s` summary
+both occur, Vigil records a hashed test-failure observation even if process
+status is missing. It does not invent an exit code or test counts. A lone
+failure line or package summary is insufficient for this fallback. Counts
+from an accompanying `Tests:` summary are omitted because the combined
+response is ambiguous, preventing an apparent passing summary from verifying
+the known failed test output. This is a reported-output heuristic, not an
+independent execution result; other unrecognized raw formats remain unknown.
+
 Codex does not document a universal unique event ID. The recorder hashes the entire input and suppresses byte-identical payloads. This protects identical retries but can also collapse independent identical events, and equivalent JSON with different encoding will not deduplicate. Hashes may reveal equality and are not encryption. Retention deletes old events during a subsequent insert. Session summaries cover retained and observed events only; missing hooks, unknown statuses, and missing usage are not zero-valued facts.
 
 The hook event list is based on [official OpenAI documentation](https://developers.openai.com/codex/hooks); support varies by installed version and surface, and specialized and hosted tools may not emit tool hooks. SessionEnd is synchronous; asynchronous hooks may finish out of order or be cancelled. See the [installation workflow](../README.md#install-and-remove-codex-integration) for the baseline event set and Codex trust review.

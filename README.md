@@ -6,6 +6,8 @@ The optional Verity-owned MCP client reads Vigil snapshots and records explicit
 links; a hook or link is not evidence of workflow completion or approval.
 See [Verity](verity/README.md), [Vigil](vigil/README.md), and the
 [synthetic bridge example](verity/docs/integrations/local-example.md).
+The [macOS-local acceptance record](docs/macos-local-acceptance.md) separates
+verified local behavior from the remaining live Vigil and desktop gates.
 
 ![Axiom overview: Verity, Codex agents, and Vigil](axiom-overview.png)
 
